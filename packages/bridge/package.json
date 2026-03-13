@@ -1,0 +1,17 @@
+{
+  "name": "@copilotchat/bridge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@copilotchat/shared": "workspace:*"
+  }
+}
