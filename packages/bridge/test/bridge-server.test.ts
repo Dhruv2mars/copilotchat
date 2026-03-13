@@ -64,7 +64,7 @@ describe("createBridgeServer", () => {
     now: () => now
   };
 
-  function buildServer(gateway = new FakeGateway()) {
+  function buildServer(gateway: ChatGateway = new FakeGateway()) {
     return {
       gateway,
       server: createBridgeServer({
