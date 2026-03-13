@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-import { createBffFromEnv, sendJson } from "../apps/web/src/server/vercel-bff";
-
 export default async function handler(request: VercelRequest, response: VercelResponse) {
+  const { createBffFromEnv, sendJson } = await import("../apps/web/src/server/vercel-bff.js");
+
   try {
     const result = await createBffFromEnv(request).bootstrap({
       cookieHeader: request.headers.cookie

@@ -1,10 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-import type { ChatStreamRequest } from "@copilotchat/shared";
-
-import { createBffFromEnv, parseJsonBody, sendJson } from "../apps/web/src/server/vercel-bff";
+import type { ChatStreamRequest } from "../packages/shared/src/protocol.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
+  const { createBffFromEnv, parseJsonBody, sendJson } = await import("../apps/web/src/server/vercel-bff.js");
   if (request.method !== "POST") {
     sendJson(response, 405, {
       error: "method_not_allowed"

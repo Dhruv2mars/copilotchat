@@ -9,7 +9,7 @@ import type {
   ChatMessage,
   ChatStreamRequest,
   ListedModel
-} from "@copilotchat/shared";
+} from "../../../../packages/shared/src/protocol.js";
 
 type AppFetch = (input: string, init?: RequestInit) => Promise<Response>;
 type CommandResult = {
