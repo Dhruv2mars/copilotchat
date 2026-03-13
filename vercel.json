@@ -3,5 +3,19 @@
   "buildCommand": "bun run --filter @copilotchat/web build",
   "devCommand": "cd apps/web && vite --port $PORT",
   "installCommand": "bun install",
-  "outputDirectory": "apps/web/dist"
+  "outputDirectory": "apps/web/dist",
+  "rewrites": [
+    {
+      "source": "/chat",
+      "destination": "/"
+    },
+    {
+      "source": "/access",
+      "destination": "/"
+    },
+    {
+      "source": "/diagnostics",
+      "destination": "/"
+    }
+  ]
 }

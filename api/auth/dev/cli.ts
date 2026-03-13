@@ -1,8 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-import { createBffFromEnv, sendJson } from "../../../apps/web/src/server/vercel-bff";
-
 export default async function handler(request: VercelRequest, response: VercelResponse) {
+  const { createBffFromEnv, sendJson } = await import("../../../apps/web/src/server/vercel-bff.js");
   if (request.method !== "POST") {
     sendJson(response, 405, {
       error: "method_not_allowed"
