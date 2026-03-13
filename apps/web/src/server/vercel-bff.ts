@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-import { createGitHubBff } from "./github-bff";
+import { createGitHubBff } from "./github-bff.js";
 
 const defaultGitHubDeviceClientId = "Iv23lij7SqVj1Eb2YRdd";
 const execFileAsync = promisify(execFile);
