@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { AuthDeviceStartResponse, ChatMessage } from "@copilotchat/shared";
 import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useStore } from "zustand";
 
 import type { AppSession, AppStore } from "./app-store";
@@ -9,6 +9,8 @@ import { createSessionId } from "./app-store";
 import type { BridgeClient } from "./bridge-client";
 
 import "./styles.css";
+
+type RuntimeState = "offline" | "ready" | "unauthenticated" | "unpaired";
 
 export function App(props: { client: BridgeClient; store: AppStore }) {
   return (
@@ -112,7 +114,7 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
     };
   }, [authChallenge, client, pairingToken, refetchHealth]);
 
-  const runtime = healthQuery.isError
+  const runtime: RuntimeState = healthQuery.isError
     ? "offline"
     : !pairingToken
       ? "unpaired"
@@ -253,56 +255,19 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div>
-          <p className="eyebrow">Copilot Chat</p>
-          <h1>Local bridge. Hosted shell. No secret leakage.</h1>
-        </div>
-
-        <nav className="nav-row" aria-label="Primary">
-          <Link to="/chat">Chat</Link>
-          <Link to="/install">Install</Link>
-          <Link to="/diagnostics">Diagnostics</Link>
-        </nav>
-
-        <div className="status-card">
-          <span className={`status-pill status-${runtime}`}>{runtime}</span>
-          <p>{healthQuery.data?.auth.accountLabel ?? "Bridge-first runtime"}</p>
-          <button className="ghost-button" onClick={() => void logout()} type="button">
-            Logout
-          </button>
-        </div>
-
-        <label className="search-box">
-          <span>Search sessions</span>
-          <input
-            onChange={(event) => store.getState().setSessionSearch(event.target.value)}
-            value={sessionSearch}
-          />
-        </label>
-
-        <button
-          className="new-thread"
-          onClick={() => startTransition(() => store.getState().createSession(createSessionId()))}
-          type="button"
-        >
-          New thread
-        </button>
-
-        <div className="session-list">
-          {filteredSessions.map((session: AppSession) => (
-            <button
-              className={session.id === activeSessionId ? "session-row active" : "session-row"}
-              key={session.id}
-              onClick={() => store.getState().setActiveSession(session.id)}
-              type="button"
-            >
-              <span>{session.title}</span>
-              <small>{session.messages.length} msgs</small>
-            </button>
-          ))}
-        </div>
-      </aside>
+      <CommandRail
+        activeSessionId={activeSessionId}
+        activeSessionTitle={activeSession?.title ?? "No thread selected"}
+        accountLabel={healthQuery.data?.auth.accountLabel ?? "Bridge-first runtime"}
+        filteredSessions={filteredSessions}
+        logout={logout}
+        runtime={runtime}
+        sessionSearch={sessionSearch}
+        setSessionSearch={(value) => store.getState().setSessionSearch(value)}
+        startNewThread={() => startTransition(() => store.getState().createSession(createSessionId()))}
+        statusNote={statusNote}
+        switchSession={(sessionId) => store.getState().setActiveSession(sessionId)}
+      />
 
       <main className="content-panel">
         <Routes>
@@ -312,21 +277,21 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
                 activeSession={activeSession}
                 accountLabel={healthQuery.data?.auth.accountLabel ?? "GitHub Models"}
                 authChallenge={authChallenge}
-                organizationDraft={organizationDraft}
                 models={modelsQuery.data ?? []}
+                organizationDraft={organizationDraft}
                 pairBridge={pairBridge}
                 pendingRequestId={pendingRequestId}
                 runtime={runtime}
                 selectedModel={selectedModel}
                 sendMessage={sendMessage}
-                startGitHubAuth={startGitHubAuth}
-                setOrganizationDraft={setOrganizationDraft}
                 setDraft={(value) => {
                   if (activeSession) {
                     store.getState().setDraft(activeSession.id, value);
                   }
                 }}
+                setOrganizationDraft={setOrganizationDraft}
                 setSelectedModel={setSelectedModel}
+                startGitHubAuth={startGitHubAuth}
                 statusNote={statusNote}
                 stopStreaming={
                   pendingRequestId && pairingToken
@@ -352,20 +317,142 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
         </Routes>
       </main>
 
-      <aside className="settings-panel">
-        <p className="eyebrow">Runtime</p>
-        <h2>Production bridge rules</h2>
-        <ul>
-          <li>Auth lives in the bridge, not browser storage.</li>
-          <li>Pairing gates every protected local call.</li>
-          <li>Hosted Vercel UI never holds Copilot secrets.</li>
-        </ul>
-      </aside>
+      <RuntimeAside
+        bridgeVersion={healthQuery.data?.bridgeVersion ?? "offline"}
+        modelCount={modelsQuery.data?.length ?? 0}
+        runtime={runtime}
+      />
     </div>
   );
 }
 
-function ChatRoute(props: {
+function CommandRail(props: {
+  activeSessionId: string | null;
+  activeSessionTitle: string;
+  accountLabel: string;
+  filteredSessions: AppSession[];
+  logout(): Promise<void>;
+  runtime: RuntimeState;
+  sessionSearch: string;
+  setSessionSearch(value: string): void;
+  startNewThread(): void;
+  statusNote: string;
+  switchSession(sessionId: string): void;
+}) {
+  const location = useLocation();
+
+  return (
+    <aside className="command-rail">
+      <div className="brand-block">
+        <p className="eyebrow">Copilot Chat</p>
+        <h1>Bridge control, not browser theater.</h1>
+        <p className="lead-copy">
+          Hosted shell on Vercel. Auth and inference stay local, visible, and recoverable.
+        </p>
+      </div>
+
+      <nav aria-label="Primary" className="nav-cluster">
+        <Link className={location.pathname === "/chat" ? "nav-link active" : "nav-link"} to="/chat">
+          Chat
+        </Link>
+        <Link className={location.pathname === "/install" ? "nav-link active" : "nav-link"} to="/install">
+          Install
+        </Link>
+        <Link
+          className={location.pathname === "/diagnostics" ? "nav-link active" : "nav-link"}
+          to="/diagnostics"
+        >
+          Diagnostics
+        </Link>
+      </nav>
+
+      <section className="rail-card status-card">
+        <div className="status-row">
+          <span className={`status-pill status-${props.runtime}`}>{formatRuntimeLabel(props.runtime)}</span>
+          <button className="ghost-button" onClick={() => void props.logout()} type="button">
+            Logout
+          </button>
+        </div>
+        <p className="rail-title">{props.accountLabel}</p>
+        <p className="rail-copy">{props.statusNote || runtimeSummary(props.runtime)}</p>
+      </section>
+
+      <section className="rail-card">
+        <div className="section-head">
+          <p className="eyebrow">Threads</p>
+          <button className="new-thread" onClick={props.startNewThread} type="button">
+            New thread
+          </button>
+        </div>
+        <label className="search-box">
+          <span>Search sessions</span>
+          <input
+            aria-label="Search sessions"
+            onChange={(event) => props.setSessionSearch(event.target.value)}
+            placeholder="Find a thread"
+            value={props.sessionSearch}
+          />
+        </label>
+        <div className="session-list">
+          {props.filteredSessions.length ? (
+            props.filteredSessions.map((session) => (
+              <button
+                className={session.id === props.activeSessionId ? "session-row active" : "session-row"}
+                key={session.id}
+                onClick={() => props.switchSession(session.id)}
+                type="button"
+              >
+                <span>{session.title}</span>
+                <small>{session.messages.length} msgs</small>
+              </button>
+            ))
+          ) : (
+            <div className="session-empty">
+              <p className="eyebrow">Queue empty</p>
+              <p>{props.activeSessionTitle === "No thread selected" ? "Create first thread." : "No search matches."}</p>
+            </div>
+          )}
+        </div>
+      </section>
+    </aside>
+  );
+}
+
+function RuntimeAside(props: { bridgeVersion: string; modelCount: number; runtime: RuntimeState }) {
+  return (
+    <aside className="runtime-aside">
+      <section className="rail-card policy-card">
+        <p className="eyebrow">Runtime policy</p>
+        <h2>Production guardrails</h2>
+        <ul className="policy-list">
+          <li>Bridge keeps secrets in keychain, not browser.</li>
+          <li>Pairing gates localhost APIs before chat unlocks.</li>
+          <li>Hosted UI stays stateless about Copilot auth.</li>
+        </ul>
+      </section>
+
+      <section className="rail-card metrics-card">
+        <p className="eyebrow">Live posture</p>
+        <div className="metric-grid">
+          <article>
+            <span>Runtime</span>
+            <strong>{formatRuntimeLabel(props.runtime)}</strong>
+          </article>
+          <article>
+            <span>Bridge</span>
+            <strong>{props.bridgeVersion}</strong>
+          </article>
+          <article>
+            <span>Models</span>
+            <strong>{props.modelCount || "0"}</strong>
+          </article>
+        </div>
+      </section>
+    </aside>
+  );
+}
+
+export function ChatRoute(props: {
   activeSession: {
     draft: string;
     id: string;
@@ -377,7 +464,7 @@ function ChatRoute(props: {
   organizationDraft: string;
   pairBridge(): Promise<void>;
   pendingRequestId: string | null;
-  runtime: "offline" | "ready" | "unauthenticated" | "unpaired";
+  runtime: RuntimeState;
   selectedModel: string;
   sendMessage(): Promise<void>;
   startGitHubAuth(): Promise<void>;
@@ -393,87 +480,145 @@ function ChatRoute(props: {
 
   if (props.runtime === "unpaired") {
     return (
-      <section className="hero-card">
-        <p className="eyebrow">Bridge handshake</p>
-        <h2>Pair your local bridge</h2>
-        <p>The hosted shell found no paired localhost runtime yet.</p>
-        {props.statusNote ? <p>{props.statusNote}</p> : null}
-        <button className="primary-button" onClick={() => void props.pairBridge()} type="button">
-          Pair bridge
-        </button>
+      <section className="stage stage-hero">
+        <div className="hero-grid">
+          <div className="hero-copy">
+            <p className="eyebrow">Bridge handshake</p>
+            <h2>Pair your local bridge</h2>
+            <p>
+              Chat stays locked until the browser proves it is talking to your localhost runtime, not a hosted fake.
+            </p>
+            {props.statusNote ? <p className="hero-note">{props.statusNote}</p> : null}
+            <button className="primary-button" onClick={() => void props.pairBridge()} type="button">
+              Pair bridge
+            </button>
+          </div>
+          <div className="hero-side">
+            <div className="signal-card">
+              <span>01</span>
+              <p>Detect bridge on localhost.</p>
+            </div>
+            <div className="signal-card">
+              <span>02</span>
+              <p>Exchange short-lived pairing proof.</p>
+            </div>
+            <div className="signal-card">
+              <span>03</span>
+              <p>Unlock auth and model calls.</p>
+            </div>
+          </div>
+        </div>
       </section>
     );
   }
 
   if (props.runtime === "unauthenticated") {
     return (
-      <section className="hero-card">
-        <p className="eyebrow">GitHub auth</p>
-        <h2>Connect with GitHub</h2>
-        <p>The local bridge owns auth. Browser never receives the GitHub secret.</p>
-        {props.statusNote ? <p>{props.statusNote}</p> : null}
-        <label className="search-box">
-          <span>Organization slug optional</span>
-          <input
-            onChange={(event) => props.setOrganizationDraft(event.target.value)}
-            placeholder="acme-inc"
-            value={props.organizationDraft}
-          />
-        </label>
-        {props.authChallenge ? (
-          <div className="status-card">
-            <p>Enter this code on GitHub:</p>
-            <h3>{props.authChallenge.userCode}</h3>
-            <p>Expires {new Date(props.authChallenge.expiresAt).toLocaleTimeString()}</p>
-            <a href={props.authChallenge.verificationUri} rel="noreferrer" target="_blank">
-              Open GitHub verification
-            </a>
+      <section className="stage stage-hero">
+        <div className="hero-grid">
+          <div className="hero-copy">
+            <p className="eyebrow">GitHub auth</p>
+            <h2>Connect with GitHub</h2>
+            <p>Authorize once. Token lands in the bridge keychain. Browser only sees runtime status.</p>
+            {props.statusNote ? <p className="hero-note">{props.statusNote}</p> : null}
+            <label className="search-box hero-input">
+              <span>Organization slug optional</span>
+              <input
+                aria-label="Organization slug optional"
+                onChange={(event) => props.setOrganizationDraft(event.target.value)}
+                placeholder="acme-inc"
+                value={props.organizationDraft}
+              />
+            </label>
+            <button className="primary-button" onClick={() => void props.startGitHubAuth()} type="button">
+              Connect with GitHub
+            </button>
           </div>
-        ) : null}
-        <button className="primary-button" onClick={() => void props.startGitHubAuth()} type="button">
-          Connect with GitHub
-        </button>
+
+          <div className="hero-side">
+            {props.authChallenge ? (
+              <div className="challenge-card">
+                <p className="eyebrow">Device code</p>
+                <h3>{props.authChallenge.userCode}</h3>
+                <p>Expires {new Date(props.authChallenge.expiresAt).toLocaleTimeString()}</p>
+                <a href={props.authChallenge.verificationUri} rel="noreferrer" target="_blank">
+                  Open GitHub verification
+                </a>
+              </div>
+            ) : (
+              <div className="challenge-card challenge-card-idle">
+                <p className="eyebrow">Auth path</p>
+                <h3>Browser redirect via bridge</h3>
+                <p>Device flow opens GitHub, bridge polls, UI refreshes when ready.</p>
+              </div>
+            )}
+          </div>
+        </div>
       </section>
     );
   }
 
+  const messages = props.activeSession === null ? [] : props.activeSession.messages;
+  const threadContent =
+    messages.length > 0 ? (
+      messages.map((message) => (
+        <article className={`message message-${message.role}`} key={message.id}>
+          <span>{message.role}</span>
+          <p>{message.content}</p>
+        </article>
+      ))
+    ) : (
+      <div className="thread-empty">
+        <p className="eyebrow">Ready</p>
+        <h3>Ask through your local Copilot bridge</h3>
+        <p>Streaming lands here. Abort, retry, and recovery stay visible instead of hidden behind hosted magic.</p>
+      </div>
+    );
+
   return (
-    <section className="chat-layout">
-      <header className="chat-header">
+    <section className="stage chat-stage">
+      <header className="chat-topbar">
         <div>
           <p className="eyebrow">Connected operator</p>
           <h2>{props.accountLabel}</h2>
         </div>
 
-        <label className="model-picker">
-          <span>Model</span>
-          <select onChange={(event) => props.setSelectedModel(event.target.value)} value={props.selectedModel}>
-            {props.models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="chat-toolbar">
+          <div className="toolbar-card">
+            <span>Status</span>
+            <strong>{props.statusNote || "Ready for chat"}</strong>
+          </div>
+          <label className="model-picker toolbar-card">
+            <span>Model</span>
+            <select
+              aria-label="Model"
+              onChange={(event) => props.setSelectedModel(event.target.value)}
+              value={props.selectedModel}
+            >
+              {props.models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </header>
 
-      <div className="thread-card">
-        {(props.activeSession?.messages ?? []).map((message) => (
-          <article className={`message message-${message.role}`} key={message.id}>
-            <span>{message.role}</span>
-            <p>{message.content}</p>
-          </article>
-        ))}
-      </div>
+      <div className="thread-card">{threadContent}</div>
 
       <footer className="composer-card">
+        <label className="composer-label" htmlFor="chat-input">
+          Message
+        </label>
         <textarea
+          id="chat-input"
           onChange={(event) => props.setDraft(event.target.value)}
           placeholder="Ask through your local Copilot bridge"
           value={props.activeSession?.draft ?? ""}
         />
         <div className="composer-row">
-          <p>{props.statusNote}</p>
+          <p>{props.statusNote || "Local stream path armed."}</p>
           {props.pendingRequestId && props.stopStreaming ? (
             <button className="ghost-button" onClick={() => void props.stopStreaming?.()} type="button">
               Stop
@@ -490,23 +635,27 @@ function ChatRoute(props: {
 
 function InstallRoute() {
   return (
-    <section className="hero-card">
-      <p className="eyebrow">Bridge install</p>
-      <h2>Install the bridge</h2>
-      <p>This UI is live on Vercel. Inference still runs through your localhost bridge.</p>
-      <div className="platform-grid">
-        <article>
-          <span>macOS</span>
-          <p>Signed `.dmg` helper with login auto-start.</p>
-        </article>
-        <article>
-          <span>Windows</span>
-          <p>Signed installer with update channel manifest.</p>
-        </article>
-        <article>
-          <span>Linux</span>
-          <p>Portable artifact plus checksum metadata.</p>
-        </article>
+    <section className="stage stage-hero">
+      <div className="hero-grid">
+        <div className="hero-copy">
+          <p className="eyebrow">Bridge install</p>
+          <h2>Install the bridge</h2>
+          <p>The Vercel app is public. Auth, models, and chat still require the local runtime on this machine.</p>
+        </div>
+        <div className="platform-grid">
+          <article>
+            <span>macOS</span>
+            <p>Signed `.dmg` helper with login auto-start.</p>
+          </article>
+          <article>
+            <span>Windows</span>
+            <p>Signed installer with update channel manifest.</p>
+          </article>
+          <article>
+            <span>Linux</span>
+            <p>Portable artifact plus checksum metadata.</p>
+          </article>
+        </div>
       </div>
     </section>
   );
@@ -514,27 +663,51 @@ function InstallRoute() {
 
 function DiagnosticsRoute(props: { pairingToken: string | null; runtime: string; version: string }) {
   return (
-    <section className="hero-card">
-      <p className="eyebrow">Diagnostics</p>
-      <h2>Runtime facts</h2>
+    <section className="stage stage-hero">
+      <div className="diagnostics-head">
+        <p className="eyebrow">Diagnostics</p>
+        <h2>Runtime facts</h2>
+      </div>
       <dl className="diagnostics-grid">
         <div>
-          <dt>Bridge version</dt>
-          <dd>{props.version}</dd>
+          <dt>Pairing</dt>
+          <dd>{props.pairingToken ? "yes" : "no"}</dd>
         </div>
         <div>
-          <dt>Runtime state</dt>
+          <dt>Runtime</dt>
           <dd>{props.runtime}</dd>
         </div>
         <div>
-          <dt>Paired</dt>
-          <dd>{props.pairingToken ? "yes" : "no"}</dd>
+          <dt>Bridge version</dt>
+          <dd>{props.version}</dd>
         </div>
       </dl>
     </section>
   );
 }
 
-function readErrorMessage(errorValue: unknown) {
-  return errorValue instanceof Error ? errorValue.message : "bridge_request_failed";
+export function formatRuntimeLabel(runtime: RuntimeState) {
+  if (runtime === "ready") return "Ready";
+  if (runtime === "offline") return "Offline";
+  if (runtime === "unpaired") return "Unpaired";
+  return "Auth required";
+}
+
+export function runtimeSummary(runtime: RuntimeState) {
+  if (runtime === "offline") return "Bridge not reachable on localhost.";
+  if (runtime === "unpaired") return "Pairing required before protected calls.";
+  if (runtime === "unauthenticated") return "GitHub auth still pending in bridge.";
+  return "Inference path armed.";
+}
+
+export function readErrorMessage(errorValue: unknown) {
+  if (errorValue instanceof Error) {
+    return errorValue.message;
+  }
+
+  if (typeof errorValue === "string") {
+    return errorValue;
+  }
+
+  return "bridge_request_failed";
 }
