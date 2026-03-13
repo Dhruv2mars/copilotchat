@@ -96,6 +96,7 @@ describe("createBridgeServer", () => {
       provider,
       server: createBridgeServer({
         auth: new AuthSessionManager({
+          now: () => now.getTime(),
           provider,
           store: new MemoryStore()
         }),
@@ -642,6 +643,7 @@ describe("createBridgeServer", () => {
             };
           }
         },
+        now: () => now.getTime(),
         store: new MemoryStore()
       }),
       bridgeVersion: "1.0.0",

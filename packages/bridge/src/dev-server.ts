@@ -27,6 +27,7 @@ class MemoryStore implements SecureStore {
 const port = Number(process.env.BRIDGE_PORT ?? "8787");
 const allowedOrigin = process.env.ALLOWED_ORIGIN ?? "http://localhost:5173";
 const fakeMode = process.env.BRIDGE_FAKE_MODE === "1";
+const defaultGitHubDeviceClientId = "Iv23lij7SqVj1Eb2YRdd";
 const modelsClient = new GitHubModelsClient();
 const auth = new AuthSessionManager({
   provider: createAuthProvider(),
@@ -171,7 +172,7 @@ function createAuthProvider(): AuthProvider {
   }
 
   return new GitHubDeviceFlowClient({
-    clientId: process.env.GITHUB_DEVICE_CLIENT_ID ?? "",
+    clientId: process.env.GITHUB_DEVICE_CLIENT_ID ?? defaultGitHubDeviceClientId,
     modelsClient,
     openUrl: openSystemBrowser,
     scope: process.env.GITHUB_DEVICE_SCOPE
