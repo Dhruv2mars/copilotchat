@@ -67,6 +67,10 @@ export interface AppBootstrapResponse {
   models: ListedModel[];
 }
 
+export interface PatAuthRequest {
+  token: string;
+}
+
 export interface AppDeviceAuthPollPendingResponse {
   pollAfterSeconds?: number;
   status: "pending";

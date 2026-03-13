@@ -68,6 +68,15 @@ interface ChatCompletionPayload {
   };
 }
 
+const copilotGaModels = [
+  { id: "openai/gpt-4.1", label: "OpenAI GPT-4.1" },
+  { id: "openai/gpt-4o", label: "OpenAI GPT-4o" },
+  { id: "openai/gpt-5", label: "OpenAI GPT-5" },
+  { id: "openai/gpt-5-mini", label: "OpenAI GPT-5 mini" },
+  { id: "openai/o3", label: "OpenAI o3" },
+  { id: "openai/o4-mini", label: "OpenAI o4-mini" }
+] as const;
+
 export function createGitHubBff(options: {
   allowDevCliAuth: boolean;
   apiBaseUrl?: string;
@@ -93,6 +102,39 @@ export function createGitHubBff(options: {
   const secureCookies = options.secureCookies ?? false;
 
   return {
+    async authWithPat(input: { token: string }) {
+      const token = input.token.trim();
+      if (!token) {
+        throw new Error("pat_required");
+      }
+
+      const session = await resolveSession({
+        apiBaseUrl,
+        fetchFn,
+        modelsBaseUrl,
+        token
+      });
+
+      return {
+        ...(await bootstrapResponse({
+          auth: buildAuthResponse(session),
+          devCliAvailable: options.allowDevCliAuth,
+          fetchFn,
+          models: session.models,
+          modelsBaseUrl,
+          token: session.token
+        })),
+        setCookieHeader: sealSessionCookie({
+          accountLabel: session.accountLabel,
+          cookieName,
+          cookieSecret: options.cookieSecret,
+          secure: secureCookies,
+          token: session.token,
+          tokenHint: session.tokenHint
+        })
+      };
+    },
+
     async authWithCli() {
       if (!options.allowDevCliAuth) {
         throw new Error("dev_cli_auth_disabled");
@@ -115,6 +157,7 @@ export function createGitHubBff(options: {
           auth: buildAuthResponse(session),
           devCliAvailable: options.allowDevCliAuth,
           fetchFn,
+          models: session.models,
           modelsBaseUrl,
           token: session.token
         })),
@@ -244,6 +287,7 @@ export function createGitHubBff(options: {
           auth: buildAuthResponse(session),
           devCliAvailable: options.allowDevCliAuth,
           fetchFn,
+          models: session.models,
           modelsBaseUrl,
           token: session.token
         })),
@@ -347,17 +391,20 @@ async function bootstrapResponse(input: {
   auth: AuthSessionResponse;
   devCliAvailable: boolean;
   fetchFn: AppFetch;
+  models?: ListedModel[];
   modelsBaseUrl: string;
   token: string;
 }): Promise<AppBootstrapResponse> {
   return {
     auth: input.auth,
     devCliAvailable: input.devCliAvailable,
-    models: await listModels({
-      fetchFn: input.fetchFn,
-      modelsBaseUrl: input.modelsBaseUrl,
-      token: input.token
-    })
+    models:
+      input.models ??
+      (await listModels({
+        fetchFn: input.fetchFn,
+        modelsBaseUrl: input.modelsBaseUrl,
+        token: input.token
+      }))
   };
 }
 
@@ -412,24 +459,87 @@ async function listModels(input: {
       ? payload.data
       : [];
 
-  return records
-    .filter(isCatalogModelRecord)
-    .filter(isChatCapable)
+  const modelMap = new Map(
+    records
+      .filter(isCatalogModelRecord)
+      .filter(isChatCapable)
+      .map((model) => [model.id, model] as const)
+  );
+
+  return copilotGaModels
+    .filter((model) => modelMap.has(model.id))
     .map((model) => ({
       id: model.id,
-      label: model.name ?? model.id
+      label: model.label
     }));
+}
+
+async function lookupViewerLabel(input: {
+  apiBaseUrl: string;
+  fetchFn: AppFetch;
+  token: string;
+}) {
+  const response = await input.fetchFn(`${input.apiBaseUrl}/user`, {
+    headers: githubHeaders(input.token)
+  });
+  if (!response.ok) {
+    return "GitHub Models";
+  }
+
+  const user = (await response.json()) as GitHubUser;
+  return typeof user.login === "string" && user.login ? user.login : "GitHub Models";
+}
+
+async function validateModelsAccess(input: {
+  fetchFn: AppFetch;
+  modelsBaseUrl: string;
+  token: string;
+}) {
+  try {
+    return await listModels(input);
+  } catch (errorValue) {
+    const error = errorValue instanceof Error ? errorValue.message : "github_models_request_failed";
+    if (error === "insufficient_scope" || error === "Resource not accessible by integration") {
+      throw new Error("github_models_pat_required");
+    }
+    throw errorValue;
+  }
+}
+
+async function resolveSession(input: {
+  apiBaseUrl: string;
+  fetchFn: AppFetch;
+  modelsBaseUrl: string;
+  token: string;
+}) {
+  const models = await validateModelsAccess({
+    fetchFn: input.fetchFn,
+    modelsBaseUrl: input.modelsBaseUrl,
+    token: input.token
+  });
+
+  return {
+    accountLabel: await lookupViewerLabel({
+      apiBaseUrl: input.apiBaseUrl,
+      fetchFn: input.fetchFn,
+      token: input.token
+    }),
+    models,
+    token: input.token,
+    tokenHint: maskToken(input.token)
+  };
 }
 
 async function readError(response: Response) {
   try {
     const payload = (await response.json()) as {
       error?: {
+        code?: string;
         message?: string;
       };
       message?: string;
     };
-    return payload.error?.message ?? payload.message ?? "github_models_request_failed";
+    return payload.error?.code ?? payload.error?.message ?? payload.message ?? "github_models_request_failed";
   } catch {
     return "github_models_request_failed";
   }
@@ -483,33 +593,6 @@ async function requestDeviceAccessToken(input: {
   }
 
   return (await response.json()) as AccessTokenPayload;
-}
-
-async function resolveSession(input: {
-  apiBaseUrl: string;
-  fetchFn: AppFetch;
-  modelsBaseUrl: string;
-  token: string;
-}) {
-  await listModels({
-    fetchFn: input.fetchFn,
-    modelsBaseUrl: input.modelsBaseUrl,
-    token: input.token
-  });
-
-  const response = await input.fetchFn(`${input.apiBaseUrl}/user`, {
-    headers: githubHeaders(input.token)
-  });
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
-
-  const user = (await response.json()) as GitHubUser;
-  return {
-    accountLabel: user.login,
-    token: input.token,
-    tokenHint: maskToken(input.token)
-  };
 }
 
 function githubHeaders(token: string) {

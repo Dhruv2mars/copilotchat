@@ -10,7 +10,7 @@ import {
 } from "./github-bff";
 
 describe("github-bff", () => {
-  it("starts device auth, polls to a session, boots authenticated state, chats, and logs out", async () => {
+  it("supports pat auth, device auth, bootstrap, chat, cli auth, and logout", async () => {
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(
@@ -35,8 +35,8 @@ describe("github-bff", () => {
         new Response(
           JSON.stringify([
             {
-              id: "openai/gpt-4.1-mini",
-              name: "OpenAI GPT-4.1 Mini",
+              id: "openai/gpt-5-mini",
+              name: "OpenAI GPT-5 mini",
               supported_input_modalities: ["text"],
               supported_output_modalities: ["text"]
             }
@@ -54,20 +54,8 @@ describe("github-bff", () => {
         new Response(
           JSON.stringify([
             {
-              id: "openai/gpt-4.1-mini",
-              name: "OpenAI GPT-4.1 Mini",
-              supported_input_modalities: ["text"],
-              supported_output_modalities: ["text"]
-            }
-          ])
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([
-            {
-              id: "openai/gpt-4.1-mini",
-              name: "OpenAI GPT-4.1 Mini",
+              id: "openai/gpt-5-mini",
+              name: "OpenAI GPT-5 mini",
               supported_input_modalities: ["text"],
               supported_output_modalities: ["text"]
             }
@@ -96,8 +84,8 @@ describe("github-bff", () => {
         new Response(
           JSON.stringify([
             {
-              id: "openai/gpt-4.1-mini",
-              name: "OpenAI GPT-4.1 Mini",
+              id: "openai/gpt-5-mini",
+              name: "OpenAI GPT-5 mini",
               supported_input_modalities: ["text"],
               supported_output_modalities: ["text"]
             }
@@ -115,12 +103,19 @@ describe("github-bff", () => {
         new Response(
           JSON.stringify([
             {
-              id: "openai/gpt-4.1-mini",
-              name: "OpenAI GPT-4.1 Mini",
+              id: "openai/gpt-5-mini",
+              name: "OpenAI GPT-5 mini",
               supported_input_modalities: ["text"],
               supported_output_modalities: ["text"]
             }
           ])
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            login: "Dhruv2mars"
+          })
         )
       );
 
@@ -163,8 +158,8 @@ describe("github-bff", () => {
       },
       models: [
         {
-          id: "openai/gpt-4.1-mini",
-          label: "OpenAI GPT-4.1 Mini"
+          id: "openai/gpt-5-mini",
+          label: "OpenAI GPT-5 mini"
         }
       ]
     });
@@ -180,7 +175,7 @@ describe("github-bff", () => {
               role: "user"
             }
           ],
-          modelId: "openai/gpt-4.1-mini",
+          modelId: "openai/gpt-5-mini",
           requestId: "req-1"
         }
       })
@@ -199,6 +194,18 @@ describe("github-bff", () => {
       auth: {
         authenticated: true
       }
+    });
+
+    await expect(bff.authWithPat({ token: "ghp_pat_12345678" })).resolves.toMatchObject({
+      auth: {
+        authenticated: true
+      },
+      models: [
+        {
+          id: "openai/gpt-5-mini",
+          label: "OpenAI GPT-5 mini"
+        }
+      ]
     });
 
     await expect(bff.logout()).resolves.toMatchObject({
@@ -273,11 +280,12 @@ describe("github-bff", () => {
         }),
         request: {
           messages: [],
-          modelId: "openai/gpt-4.1-mini",
+          modelId: "openai/gpt-5-mini",
           requestId: "req-1"
         }
       })
     ).rejects.toThrow("chat_forbidden");
+    await expect(failing.authWithPat({ token: "   " })).rejects.toThrow("pat_required");
     await expect(failing.authWithCli()).rejects.toThrow("dev_cli_auth_disabled");
 
     expect(splitSetCookieHeader("a=1; Path=/, b=2; Path=/")).toEqual(["a=1; Path=/", "b=2; Path=/"]);

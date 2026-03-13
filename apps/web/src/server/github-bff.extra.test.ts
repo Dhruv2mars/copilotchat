@@ -180,29 +180,6 @@ describe("github-bff extra", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            data: [
-              {
-                capabilities: ["chat"],
-                id: "model-cap",
-                name: "Cap model"
-              },
-              {
-                id: "model-task",
-                task: "chat-completion"
-              },
-              {
-                id: "model-text",
-                name: "Text model",
-                supported_input_modalities: ["text"],
-                supported_output_modalities: ["text"]
-              }
-            ]
-          })
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
             choices: [
               {
                 message: {
@@ -237,20 +214,7 @@ describe("github-bff extra", () => {
         accountLabel: "Dhruv2mars",
         authenticated: true
       },
-      models: [
-        {
-          id: "model-cap",
-          label: "Cap model"
-        },
-        {
-          id: "model-task",
-          label: "model-task"
-        },
-        {
-          id: "model-text",
-          label: "Text model"
-        }
-      ]
+      models: []
     });
     expect(bootstrap.setCookieHeader).toContain("Secure");
 
@@ -311,7 +275,13 @@ describe("github-bff extra", () => {
         )
     });
 
-    await expect(failingUserBff.authWithCli()).rejects.toThrow("viewer_forbidden");
+    await expect(failingUserBff.authWithCli()).resolves.toMatchObject({
+      auth: {
+        accountLabel: "GitHub Models",
+        authenticated: true
+      },
+      models: []
+    });
   });
 
   it("covers scope propagation, access denial, empty catalogs, and default fetch wiring", async () => {
@@ -435,16 +405,6 @@ describe("github-bff extra", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([
-            {
-              capabilities: ["vision"],
-              id: "model-cap"
-            }
-          ])
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
           JSON.stringify({
             choices: [
               {
@@ -485,7 +445,7 @@ describe("github-bff extra", () => {
         cookieHeader: bootstrap.setCookieHeader,
         request: {
           messages: [],
-          modelId: "model-cap",
+          modelId: "openai/gpt-5-mini",
           requestId: "req-1"
         }
       })
@@ -579,6 +539,66 @@ describe("github-bff extra", () => {
       usage: {
         inputTokens: 0,
         outputTokens: 0
+      }
+    });
+  });
+
+  it("maps missing models scopes to pat-required and rethrows unknown fetch failures", async () => {
+    const scopedBff = createGitHubBff({
+      allowDevCliAuth: true,
+      clientId: "client-1",
+      cookieSecret: "secret-secret-secret-secret",
+      execCommand: vi.fn(),
+      fetchFn: vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "insufficient_scope"
+            }
+          }),
+          {
+            status: 403
+          }
+        )
+      )
+    });
+
+    await expect(scopedBff.authWithPat({ token: "ghp_pat_12345678" })).rejects.toThrow("github_models_pat_required");
+
+    const explodingBff = createGitHubBff({
+      allowDevCliAuth: true,
+      clientId: "client-1",
+      cookieSecret: "secret-secret-secret-secret",
+      execCommand: vi.fn(),
+      fetchFn: vi.fn().mockRejectedValue("boom")
+    });
+
+    await expect(explodingBff.authWithPat({ token: "ghp_pat_12345678" })).rejects.toEqual("boom");
+
+    const anonymousViewerBff = createGitHubBff({
+      allowDevCliAuth: true,
+      clientId: "client-1",
+      cookieSecret: "secret-secret-secret-secret",
+      execCommand: vi.fn(),
+      fetchFn: vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify([
+              {
+                id: "openai/gpt-5-mini",
+                supported_input_modalities: ["text"],
+                supported_output_modalities: ["text"]
+              }
+            ])
+          )
+        )
+        .mockResolvedValueOnce(new Response(JSON.stringify({})))
+    });
+
+    await expect(anonymousViewerBff.authWithPat({ token: "ghp_pat_12345678" })).resolves.toMatchObject({
+      auth: {
+        accountLabel: "GitHub Models"
       }
     });
   });
