@@ -7,6 +7,9 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "bun run scripts/dev.ts",
+    "dev:web": "bun run --filter @copilotchat/web dev",
+    "dev:bridge": "bun run --filter @copilotchat/bridge dev",
     "test": "bun run test:coverage",
     "test:coverage": "bun run --filter '*' test:coverage",
     "test:e2e": "playwright test",
