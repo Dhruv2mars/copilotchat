@@ -59,32 +59,32 @@ describe("App", () => {
   it("pairs, connects, and streams a chat session", async () => {
     const healthQueue: BridgeHealth[] = [
       {
-        auth: {
-          accountLabel: null,
-          authenticated: false,
-          provider: "github-copilot"
-        },
+            auth: {
+              accountLabel: null,
+              authenticated: false,
+              provider: "github-models"
+            },
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
         status: "ok"
       },
       {
-        auth: {
-          accountLabel: null,
-          authenticated: false,
-          provider: "github-copilot"
-        },
+            auth: {
+              accountLabel: null,
+              authenticated: false,
+              provider: "github-models"
+            },
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
         status: "ok"
       },
       {
-        auth: {
-          accountLabel: "dhruv2mars",
-          authenticated: true,
-          expiresAt: "2026-03-14T10:00:00.000Z",
-          provider: "github-copilot"
-        },
+            auth: {
+              accountLabel: "dhruv2mars",
+              authenticated: true,
+              provider: "github-models",
+              tokenHint: "ghp_...7890"
+            },
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
         status: "ok"
@@ -96,8 +96,8 @@ describe("App", () => {
       connectAuth: vi.fn().mockResolvedValue({
         accountLabel: "dhruv2mars",
         authenticated: true,
-        expiresAt: "2026-03-14T10:00:00.000Z",
-        provider: "github-copilot"
+        provider: "github-models",
+        tokenHint: "ghp_...7890"
       } satisfies AuthSessionResponse),
       confirmPairing: vi.fn().mockResolvedValue({
         pairedAt: "2026-03-13T10:00:00.000Z",
@@ -117,7 +117,7 @@ describe("App", () => {
       logout: vi.fn().mockResolvedValue({
         accountLabel: null,
         authenticated: false,
-        provider: "github-copilot"
+        provider: "github-models"
       }),
       startPairing: vi.fn().mockResolvedValue({
         code: "ABC123",
@@ -154,9 +154,15 @@ describe("App", () => {
       expect(client.confirmPairing).toHaveBeenCalled();
     });
 
-    await user.click(await screen.findByRole("button", { name: "Connect Copilot" }));
+    await user.type(await screen.findByLabelText("GitHub token"), "ghp_1234567890");
+    await user.type(screen.getByLabelText("Organization slug optional"), "acme");
+    await user.click(await screen.findByRole("button", { name: "Connect GitHub" }));
     await waitFor(() => {
       expect(client.listModels).toHaveBeenCalled();
+    });
+    expect(client.connectAuth).toHaveBeenCalledWith({
+      organization: "acme",
+      token: "ghp_1234567890"
     });
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(client.streamChat).not.toHaveBeenCalled();
@@ -182,22 +188,22 @@ describe("App", () => {
     let releaseStream: () => void = () => undefined;
     const healthQueue: BridgeHealth[] = [
       {
-        auth: {
-          accountLabel: "dhruv2mars",
-          authenticated: true,
-          expiresAt: "2026-03-14T10:00:00.000Z",
-          provider: "github-copilot"
-        },
+            auth: {
+              accountLabel: "dhruv2mars",
+              authenticated: true,
+              provider: "github-models",
+              tokenHint: "ghp_...7890"
+            },
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
         status: "ok"
       },
       {
-        auth: {
-          accountLabel: null,
-          authenticated: false,
-          provider: "github-copilot"
-        },
+            auth: {
+              accountLabel: null,
+              authenticated: false,
+              provider: "github-models"
+            },
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
         status: "ok"
@@ -220,7 +226,7 @@ describe("App", () => {
       logout: vi.fn().mockResolvedValue({
         accountLabel: null,
         authenticated: false,
-        provider: "github-copilot"
+        provider: "github-models"
       }),
       startPairing: vi.fn(),
       streamChat: vi.fn().mockImplementation(
@@ -263,7 +269,7 @@ describe("App", () => {
     expect(await screen.findByText("Generation stopped")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Logout" }));
-    expect(await screen.findByRole("button", { name: "Connect Copilot" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Connect GitHub" })).toBeInTheDocument();
   });
 
   it("shows diagnostics when no pairing token exists", async () => {
@@ -275,7 +281,7 @@ describe("App", () => {
         auth: {
           accountLabel: null,
           authenticated: false,
-          provider: "github-copilot"
+          provider: "github-models"
         },
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
@@ -291,5 +297,140 @@ describe("App", () => {
 
     expect(await screen.findByText("Runtime facts")).toBeInTheDocument();
     expect(screen.getByText("no")).toBeInTheDocument();
+  });
+
+  it("surfaces pair, blank-token, and logout failures", async () => {
+    const failingPairClient: BridgeClient = {
+      abortChat: vi.fn(),
+      connectAuth: vi.fn(),
+      confirmPairing: vi.fn(),
+      health: vi.fn().mockResolvedValue({
+        auth: {
+          accountLabel: null,
+          authenticated: false,
+          provider: "github-models"
+        },
+        bridgeVersion: "1.0.0",
+        protocolVersion: "2026-03-13",
+        status: "ok"
+      }),
+      listModels: vi.fn(),
+      logout: vi.fn().mockRejectedValue("bad"),
+      startPairing: vi.fn().mockRejectedValue(new Error("pair_failed")),
+      streamChat: vi.fn()
+    };
+
+    const pairView = renderApp(failingPairClient, "/chat");
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Pair bridge" }));
+    await waitFor(() => {
+      expect(failingPairClient.startPairing).toHaveBeenCalled();
+    });
+
+    pairView.unmount();
+    localStorage.clear();
+    const store = createAppStore();
+    store.getState().setPairingToken("pair-token");
+    renderApp(failingPairClient, "/chat", store);
+    await user.click(await screen.findByRole("button", { name: "Connect GitHub" }));
+    expect(await screen.findByText("Paste a GitHub token first")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Logout" }));
+    expect(await screen.findByText("bridge_request_failed")).toBeInTheDocument();
+  });
+
+  it("surfaces connect, send, and stop failures", async () => {
+    const unauthStore = createAppStore();
+    unauthStore.getState().setPairingToken("pair-token");
+
+    const connectClient: BridgeClient = {
+      abortChat: vi.fn(),
+      connectAuth: vi.fn().mockRejectedValue(new Error("auth_failed")),
+      confirmPairing: vi.fn(),
+      health: vi.fn().mockResolvedValue({
+        auth: {
+          accountLabel: null,
+          authenticated: false,
+          provider: "github-models"
+        },
+        bridgeVersion: "1.0.0",
+        protocolVersion: "2026-03-13",
+        status: "ok"
+      }),
+      listModels: vi.fn(),
+      logout: vi.fn(),
+      startPairing: vi.fn(),
+      streamChat: vi.fn()
+    };
+
+    const user = userEvent.setup();
+    const connectView = renderApp(connectClient, "/chat", unauthStore);
+    await user.type(await screen.findByLabelText("GitHub token"), "ghp_1234567890");
+    await user.click(screen.getByRole("button", { name: "Connect GitHub" }));
+    expect(await screen.findByText("auth_failed")).toBeInTheDocument();
+
+    connectView.unmount();
+    localStorage.clear();
+
+    const readyStore = createAppStore();
+    readyStore.getState().setPairingToken("pair-token");
+    readyStore.getState().createSession("session-1");
+    readyStore.getState().setDraft("session-1", "Ship it");
+
+    let releaseStream: () => void = () => undefined;
+    const readyClient: BridgeClient = {
+      abortChat: vi.fn().mockRejectedValue(new Error("abort_failed")),
+      connectAuth: vi.fn(),
+      confirmPairing: vi.fn(),
+      health: vi.fn().mockResolvedValue({
+        auth: {
+          accountLabel: "dhruv2mars",
+          authenticated: true,
+          provider: "github-models",
+          tokenHint: "ghp_...7890"
+        },
+        bridgeVersion: "1.0.0",
+        protocolVersion: "2026-03-13",
+        status: "ok"
+      }),
+      listModels: vi.fn().mockResolvedValue([
+        {
+          id: "gpt-4.1",
+          label: "GPT-4.1"
+        }
+      ]),
+      logout: vi.fn(),
+      startPairing: vi.fn(),
+      streamChat: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("send_failed"))
+        .mockImplementationOnce(
+          async (
+            _request: { origin: string; request: ChatStreamRequest; token: string },
+            onEvent: (event: BridgeStreamEvent) => void
+          ) => {
+            onEvent({
+              data: "partial",
+              type: "assistant_delta"
+            });
+
+            await new Promise<void>((resolve) => {
+              releaseStream = resolve;
+            });
+          }
+        )
+    };
+
+    renderApp(readyClient, "/chat", readyStore);
+    await user.click(await screen.findByRole("button", { name: "Send" }));
+    expect(await screen.findByText("send_failed")).toBeInTheDocument();
+
+    readyStore.getState().setDraft("session-1", "Try again");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByRole("button", { name: "Stop" });
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(await screen.findByText("abort_failed")).toBeInTheDocument();
+    releaseStream();
   });
 });

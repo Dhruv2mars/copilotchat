@@ -46,6 +46,8 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
   const [selectedModel, setSelectedModel] = useState("");
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
   const [statusNote, setStatusNote] = useState("");
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [organizationDraft, setOrganizationDraft] = useState("");
   const deferredSearch = useDeferredValue(sessionSearch);
 
   useEffect(() => {
@@ -81,21 +83,41 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
   );
 
   async function pairBridge() {
-    const challenge = await client.startPairing({
-      origin: window.location.origin
-    });
-    const session = await client.confirmPairing({
-      code: challenge.code,
-      origin: window.location.origin,
-      pairingId: challenge.pairingId
-    });
-    store.getState().setPairingToken(session.token);
-    await healthQuery.refetch();
+    try {
+      const challenge = await client.startPairing({
+        origin: window.location.origin
+      });
+      const session = await client.confirmPairing({
+        code: challenge.code,
+        origin: window.location.origin,
+        pairingId: challenge.pairingId
+      });
+      store.getState().setPairingToken(session.token);
+      setStatusNote("Bridge paired");
+      await healthQuery.refetch();
+    } catch (errorValue) {
+      setStatusNote(readErrorMessage(errorValue));
+    }
   }
 
   async function connectCopilot() {
-    await client.connectAuth();
-    await healthQuery.refetch();
+    const token = tokenDraft.trim();
+    if (!token) {
+      setStatusNote("Paste a GitHub token first");
+      return;
+    }
+
+    try {
+      await client.connectAuth({
+        organization: organizationDraft.trim() || undefined,
+        token
+      });
+      setTokenDraft("");
+      setStatusNote("GitHub Models connected");
+      await healthQuery.refetch();
+    } catch (errorValue) {
+      setStatusNote(readErrorMessage(errorValue));
+    }
   }
 
   async function sendMessage() {
@@ -156,24 +178,35 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
           setStatusNote(event.message);
         }
       );
+    } catch (errorValue) {
+      setStatusNote(readErrorMessage(errorValue));
     } finally {
       setPendingRequestId(null);
     }
   }
 
   async function stopStreaming(requestId: string, token: string) {
-    await client.abortChat({
-      origin: window.location.origin,
-      requestId,
-      token
-    });
-    setPendingRequestId(null);
-    setStatusNote("Generation stopped");
+    try {
+      await client.abortChat({
+        origin: window.location.origin,
+        requestId,
+        token
+      });
+      setPendingRequestId(null);
+      setStatusNote("Generation stopped");
+    } catch (errorValue) {
+      setStatusNote(readErrorMessage(errorValue));
+    }
   }
 
   async function logout() {
-    await client.logout();
-    await healthQuery.refetch();
+    try {
+      await client.logout();
+      setStatusNote("Local bridge logged out");
+      await healthQuery.refetch();
+    } catch (errorValue) {
+      setStatusNote(readErrorMessage(errorValue));
+    }
   }
 
   return (
@@ -235,26 +268,30 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
             element={
               <ChatRoute
                 activeSession={activeSession}
-                accountLabel={healthQuery.data?.auth.accountLabel ?? "Local Copilot"}
+                accountLabel={healthQuery.data?.auth.accountLabel ?? "GitHub Models"}
                 connectCopilot={connectCopilot}
+                organizationDraft={organizationDraft}
                 models={modelsQuery.data ?? []}
                 pairBridge={pairBridge}
                 pendingRequestId={pendingRequestId}
                 runtime={runtime}
                 selectedModel={selectedModel}
                 sendMessage={sendMessage}
+                setOrganizationDraft={setOrganizationDraft}
                 setDraft={(value) => {
                   if (activeSession) {
                     store.getState().setDraft(activeSession.id, value);
                   }
                 }}
                 setSelectedModel={setSelectedModel}
+                setTokenDraft={setTokenDraft}
                 statusNote={statusNote}
                 stopStreaming={
                   pendingRequestId && pairingToken
                     ? () => stopStreaming(pendingRequestId, pairingToken)
                     : null
                 }
+                tokenDraft={tokenDraft}
               />
             }
             path="/chat"
@@ -296,15 +333,19 @@ function ChatRoute(props: {
   accountLabel: string;
   connectCopilot(): Promise<void>;
   models: { id: string; label: string }[];
+  organizationDraft: string;
   pairBridge(): Promise<void>;
   pendingRequestId: string | null;
   runtime: "offline" | "ready" | "unauthenticated" | "unpaired";
   selectedModel: string;
   sendMessage(): Promise<void>;
   setDraft(value: string): void;
+  setOrganizationDraft(value: string): void;
   setSelectedModel(value: string): void;
+  setTokenDraft(value: string): void;
   statusNote: string;
   stopStreaming: (() => Promise<void>) | null;
+  tokenDraft: string;
 }) {
   if (props.runtime === "offline") {
     return <InstallRoute />;
@@ -316,6 +357,7 @@ function ChatRoute(props: {
         <p className="eyebrow">Bridge handshake</p>
         <h2>Pair your local bridge</h2>
         <p>The hosted shell found no paired localhost runtime yet.</p>
+        {props.statusNote ? <p>{props.statusNote}</p> : null}
         <button className="primary-button" onClick={() => void props.pairBridge()} type="button">
           Pair bridge
         </button>
@@ -326,11 +368,29 @@ function ChatRoute(props: {
   if (props.runtime === "unauthenticated") {
     return (
       <section className="hero-card">
-        <p className="eyebrow">Copilot auth</p>
-        <h2>Connect Copilot</h2>
-        <p>Bridge is paired. Auth still lives locally and must be activated there.</p>
+        <p className="eyebrow">GitHub auth</p>
+        <h2>Connect GitHub Models</h2>
+        <p>Paste a GitHub token with model access. Token stays in the local bridge keychain.</p>
+        {props.statusNote ? <p>{props.statusNote}</p> : null}
+        <label className="search-box">
+          <span>GitHub token</span>
+          <input
+            onChange={(event) => props.setTokenDraft(event.target.value)}
+            placeholder="github_pat_..."
+            type="password"
+            value={props.tokenDraft}
+          />
+        </label>
+        <label className="search-box">
+          <span>Organization slug optional</span>
+          <input
+            onChange={(event) => props.setOrganizationDraft(event.target.value)}
+            placeholder="acme-inc"
+            value={props.organizationDraft}
+          />
+        </label>
         <button className="primary-button" onClick={() => void props.connectCopilot()} type="button">
-          Connect Copilot
+          Connect GitHub
         </button>
       </section>
     );
@@ -432,4 +492,8 @@ function DiagnosticsRoute(props: { pairingToken: string | null; runtime: string;
       </dl>
     </section>
   );
+}
+
+function readErrorMessage(errorValue: unknown) {
+  return errorValue instanceof Error ? errorValue.message : "bridge_request_failed";
 }
