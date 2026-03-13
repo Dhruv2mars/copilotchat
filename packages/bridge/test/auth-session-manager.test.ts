@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   AuthSessionManager,
@@ -23,20 +23,25 @@ class MemoryStore implements SecureStore {
 }
 
 describe("AuthSessionManager", () => {
-  const provider: AuthProvider = {
-    async connect(input) {
-      return {
-        accountLabel: "dhruv2mars",
-        organization: input.organization,
-        token: input.token,
-        tokenHint: "ghp_...7890"
-      };
-    }
-  };
-
   it("reports disconnected by default", async () => {
     const manager = new AuthSessionManager({
-      provider,
+      provider: {
+        async pollDeviceAuthorization() {
+          return {
+            intervalSeconds: 5,
+            status: "pending"
+          };
+        },
+        async startDeviceAuthorization() {
+          return {
+            deviceCode: "device-1",
+            expiresAt: "2026-03-13T10:10:00.000Z",
+            intervalSeconds: 5,
+            userCode: "ABCD-EFGH",
+            verificationUri: "https://github.com/login/device"
+          };
+        }
+      },
       store: new MemoryStore()
     });
 
@@ -47,29 +52,95 @@ describe("AuthSessionManager", () => {
     });
   });
 
-  it("persists connect and clears on logout", async () => {
+  it("tracks device auth, persists session, refreshes, and clears on logout", async () => {
+    let now = Date.parse("2026-03-13T10:00:00.000Z");
     const store = new MemoryStore();
+    const provider: AuthProvider = {
+      pollDeviceAuthorization: vi
+        .fn()
+        .mockResolvedValueOnce({
+          intervalSeconds: 5,
+          status: "pending"
+        })
+        .mockResolvedValueOnce({
+          session: {
+            accountLabel: "dhruv2mars",
+            expiresAt: "2026-03-13T10:01:00.000Z",
+            organization: "acme",
+            refreshToken: "refresh-1",
+            token: "access-1",
+            tokenHint: "ghu_...cess"
+          },
+          status: "complete"
+        }),
+      refresh: vi.fn().mockResolvedValue({
+        accountLabel: "dhruv2mars",
+        expiresAt: "2026-03-13T10:30:00.000Z",
+        organization: "acme",
+        refreshToken: "refresh-2",
+        token: "access-2",
+        tokenHint: "ghu_...ss-2"
+      }),
+      startDeviceAuthorization: vi.fn().mockResolvedValue({
+        deviceCode: "device-1",
+        expiresAt: "2026-03-13T10:10:00.000Z",
+        intervalSeconds: 5,
+        organization: "acme",
+        userCode: "ABCD-EFGH",
+        verificationUri: "https://github.com/login/device"
+      })
+    };
+
     const manager = new AuthSessionManager({
+      now: () => now,
       provider,
       store
     });
 
-    await manager.connect({
-      organization: "acme",
-      token: "ghp_1234567890"
+    await expect(
+      manager.startDeviceAuthorization({
+        organization: "acme"
+      })
+    ).resolves.toMatchObject({
+      deviceCode: "device-1"
     });
 
-    await expect(manager.getSession()).resolves.toEqual({
+    await expect(
+      manager.pollDeviceAuthorization({
+        deviceCode: "device-1"
+      })
+    ).resolves.toEqual({
+      accountLabel: null,
+      authenticated: false,
+      organization: "acme",
+      pollAfterSeconds: 5,
+      provider: "github-models",
+      status: "pending"
+    });
+
+    await expect(
+      manager.pollDeviceAuthorization({
+        deviceCode: "device-1"
+      })
+    ).resolves.toEqual({
       accountLabel: "dhruv2mars",
       authenticated: true,
+      expiresAt: "2026-03-13T10:01:00.000Z",
       organization: "acme",
       provider: "github-models",
-      tokenHint: "ghp_...7890"
+      status: "complete",
+      tokenHint: "ghu_...cess"
     });
 
+    now = Date.parse("2026-03-13T10:00:30.000Z");
     await expect(manager.getStoredSession()).resolves.toMatchObject({
-      token: "ghp_1234567890"
+      token: "access-2"
     });
+    expect(provider.refresh).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: "access-1"
+      })
+    );
 
     await manager.logout();
 
@@ -79,5 +150,99 @@ describe("AuthSessionManager", () => {
       provider: "github-models"
     });
     await expect(store.get("copilot_session")).resolves.toBeNull();
+  });
+
+  it("rejects missing or expired device flows and clears bad refreshes", async () => {
+    let now = Date.parse("2026-03-13T10:00:00.000Z");
+    const store = new MemoryStore();
+    const manager = new AuthSessionManager({
+      now: () => now,
+      provider: {
+        async pollDeviceAuthorization() {
+          return {
+            intervalSeconds: 5,
+            status: "pending"
+          };
+        },
+        refresh: vi.fn().mockRejectedValue(new Error("refresh_failed")),
+        async startDeviceAuthorization() {
+          return {
+            deviceCode: "device-2",
+            expiresAt: "2026-03-13T10:00:10.000Z",
+            intervalSeconds: 5,
+            userCode: "WXYZ-0000",
+            verificationUri: "https://github.com/login/device"
+          };
+        }
+      },
+      store
+    });
+
+    await expect(
+      manager.pollDeviceAuthorization({
+        deviceCode: "missing"
+      })
+    ).rejects.toThrow("auth_flow_not_found");
+
+    await manager.startDeviceAuthorization({});
+    now = Date.parse("2026-03-13T10:00:11.000Z");
+    await expect(
+      manager.pollDeviceAuthorization({
+        deviceCode: "device-2"
+      })
+    ).rejects.toThrow("auth_flow_expired");
+
+    await store.set(
+      "copilot_session",
+      JSON.stringify({
+        accountLabel: "dhruv2mars",
+        expiresAt: "2026-03-13T10:00:00.000Z",
+        refreshToken: "refresh-1",
+        token: "access-1",
+        tokenHint: "ghu_...cess"
+      })
+    );
+
+    await expect(manager.getStoredSession()).resolves.toBeNull();
+    await expect(store.get("copilot_session")).resolves.toBeNull();
+  });
+
+  it("returns expiring sessions unchanged when provider has no refresh", async () => {
+    const store = new MemoryStore();
+    await store.set(
+      "copilot_session",
+      JSON.stringify({
+        accountLabel: "dhruv2mars",
+        expiresAt: "2026-03-13T10:00:00.000Z",
+        token: "access-1",
+        tokenHint: "ghu_...cess"
+      })
+    );
+
+    const manager = new AuthSessionManager({
+      now: () => Date.parse("2026-03-13T10:00:00.000Z"),
+      provider: {
+        async pollDeviceAuthorization() {
+          return {
+            intervalSeconds: 5,
+            status: "pending"
+          };
+        },
+        async startDeviceAuthorization() {
+          return {
+            deviceCode: "device-1",
+            expiresAt: "2026-03-13T10:10:00.000Z",
+            intervalSeconds: 5,
+            userCode: "ABCD-EFGH",
+            verificationUri: "https://github.com/login/device"
+          };
+        }
+      },
+      store
+    });
+
+    await expect(manager.getStoredSession()).resolves.toMatchObject({
+      token: "access-1"
+    });
   });
 });

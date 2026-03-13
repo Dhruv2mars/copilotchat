@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  AuthDevicePollResponse,
+  AuthDeviceStartResponse,
   AuthSessionResponse,
   BridgeHealth,
   BridgeStreamEvent,
@@ -37,15 +39,55 @@ function renderApp(client: BridgeClient, path = "/", store = createAppStore()) {
   );
 }
 
+function createChallenge(overrides?: Partial<AuthDeviceStartResponse>): AuthDeviceStartResponse {
+  return {
+    deviceCode: "device-1",
+    expiresAt: "2026-03-13T10:10:00.000Z",
+    intervalSeconds: 5,
+    organization: "acme",
+    userCode: "ABCD-EFGH",
+    verificationUri: "https://github.com/login/device",
+    ...overrides
+  };
+}
+
+function createAuthSession(overrides?: Partial<AuthSessionResponse>): AuthSessionResponse {
+  return {
+    accountLabel: "dhruv2mars",
+    authenticated: true,
+    organization: "acme",
+    provider: "github-models",
+    tokenHint: "ghu_...7890",
+    ...overrides
+  };
+}
+
+function createPollResponse(overrides?: Partial<AuthDevicePollResponse>): AuthDevicePollResponse {
+  return {
+    accountLabel: null,
+    authenticated: false,
+    organization: "acme",
+    pollAfterSeconds: 5,
+    provider: "github-models",
+    status: "pending",
+    ...overrides
+  };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("App", () => {
   it("shows install help when bridge is offline", async () => {
     const client: BridgeClient = {
       abortChat: vi.fn(),
-      connectAuth: vi.fn(),
       confirmPairing: vi.fn(),
       health: vi.fn().mockRejectedValue(new Error("offline")),
       listModels: vi.fn(),
       logout: vi.fn(),
+      pollDeviceAuth: vi.fn(),
+      startDeviceAuth: vi.fn(),
       startPairing: vi.fn(),
       streamChat: vi.fn()
     };
@@ -56,35 +98,30 @@ describe("App", () => {
     expect(screen.getByText("macOS")).toBeInTheDocument();
   });
 
-  it("pairs, connects, and streams a chat session", async () => {
+  it("pairs, runs github device auth, and streams a chat session", async () => {
     const healthQueue: BridgeHealth[] = [
       {
-            auth: {
-              accountLabel: null,
-              authenticated: false,
-              provider: "github-models"
-            },
+        auth: {
+          accountLabel: null,
+          authenticated: false,
+          provider: "github-models"
+        },
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
         status: "ok"
       },
       {
-            auth: {
-              accountLabel: null,
-              authenticated: false,
-              provider: "github-models"
-            },
+        auth: {
+          accountLabel: null,
+          authenticated: false,
+          provider: "github-models"
+        },
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
         status: "ok"
       },
       {
-            auth: {
-              accountLabel: "dhruv2mars",
-              authenticated: true,
-              provider: "github-models",
-              tokenHint: "ghp_...7890"
-            },
+        auth: createAuthSession(),
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
         status: "ok"
@@ -93,12 +130,6 @@ describe("App", () => {
 
     const client: BridgeClient = {
       abortChat: vi.fn().mockResolvedValue(undefined),
-      connectAuth: vi.fn().mockResolvedValue({
-        accountLabel: "dhruv2mars",
-        authenticated: true,
-        provider: "github-models",
-        tokenHint: "ghp_...7890"
-      } satisfies AuthSessionResponse),
       confirmPairing: vi.fn().mockResolvedValue({
         pairedAt: "2026-03-13T10:00:00.000Z",
         token: "pair-token"
@@ -119,6 +150,14 @@ describe("App", () => {
         authenticated: false,
         provider: "github-models"
       }),
+      pollDeviceAuth: vi.fn().mockResolvedValue(
+        createPollResponse({
+          ...createAuthSession(),
+          authenticated: true,
+          status: "complete"
+        })
+      ),
+      startDeviceAuth: vi.fn().mockResolvedValue(createChallenge()),
       startPairing: vi.fn().mockResolvedValue({
         code: "ABC123",
         expiresAt: "2026-03-13T10:01:00.000Z",
@@ -127,7 +166,7 @@ describe("App", () => {
       } satisfies PairStartResponse),
       streamChat: vi.fn().mockImplementation(
         async (
-          request: { origin: string; request: ChatStreamRequest; token: string },
+          _request: { origin: string; request: ChatStreamRequest; token: string },
           onEvent: (event: BridgeStreamEvent) => void
         ) => {
           onEvent({
@@ -154,16 +193,20 @@ describe("App", () => {
       expect(client.confirmPairing).toHaveBeenCalled();
     });
 
-    await user.type(await screen.findByLabelText("GitHub token"), "ghp_1234567890");
-    await user.type(screen.getByLabelText("Organization slug optional"), "acme");
-    await user.click(await screen.findByRole("button", { name: "Connect GitHub" }));
+    await user.type(await screen.findByLabelText("Organization slug optional"), "acme");
+    await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
+
+    expect(client.startDeviceAuth).toHaveBeenCalledWith({
+      openInBrowser: true,
+      organization: "acme",
+      origin: "http://localhost:3000",
+      token: "pair-token"
+    });
     await waitFor(() => {
+      expect(client.pollDeviceAuth).toHaveBeenCalledTimes(1);
       expect(client.listModels).toHaveBeenCalled();
     });
-    expect(client.connectAuth).toHaveBeenCalledWith({
-      organization: "acme",
-      token: "ghp_1234567890"
-    });
+
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(client.streamChat).not.toHaveBeenCalled();
     await user.selectOptions(screen.getByRole("combobox"), "gpt-4.5");
@@ -188,22 +231,17 @@ describe("App", () => {
     let releaseStream: () => void = () => undefined;
     const healthQueue: BridgeHealth[] = [
       {
-            auth: {
-              accountLabel: "dhruv2mars",
-              authenticated: true,
-              provider: "github-models",
-              tokenHint: "ghp_...7890"
-            },
+        auth: createAuthSession(),
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
         status: "ok"
       },
       {
-            auth: {
-              accountLabel: null,
-              authenticated: false,
-              provider: "github-models"
-            },
+        auth: {
+          accountLabel: null,
+          authenticated: false,
+          provider: "github-models"
+        },
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
         status: "ok"
@@ -214,7 +252,6 @@ describe("App", () => {
       abortChat: vi.fn().mockImplementation(async () => {
         releaseStream();
       }),
-      connectAuth: vi.fn(),
       confirmPairing: vi.fn(),
       health: vi.fn().mockImplementation(async () => healthQueue.shift() ?? healthQueue.at(-1)),
       listModels: vi.fn().mockResolvedValue([
@@ -228,6 +265,8 @@ describe("App", () => {
         authenticated: false,
         provider: "github-models"
       }),
+      pollDeviceAuth: vi.fn(),
+      startDeviceAuth: vi.fn(),
       startPairing: vi.fn(),
       streamChat: vi.fn().mockImplementation(
         async (
@@ -269,13 +308,12 @@ describe("App", () => {
     expect(await screen.findByText("Generation stopped")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Logout" }));
-    expect(await screen.findByRole("button", { name: "Connect GitHub" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Connect with GitHub" })).toBeInTheDocument();
   });
 
   it("shows diagnostics when no pairing token exists", async () => {
     const client: BridgeClient = {
       abortChat: vi.fn(),
-      connectAuth: vi.fn(),
       confirmPairing: vi.fn(),
       health: vi.fn().mockResolvedValue({
         auth: {
@@ -289,6 +327,8 @@ describe("App", () => {
       }),
       listModels: vi.fn(),
       logout: vi.fn(),
+      pollDeviceAuth: vi.fn(),
+      startDeviceAuth: vi.fn(),
       startPairing: vi.fn(),
       streamChat: vi.fn()
     };
@@ -299,10 +339,9 @@ describe("App", () => {
     expect(screen.getByText("no")).toBeInTheDocument();
   });
 
-  it("surfaces pair, blank-token, and logout failures", async () => {
+  it("surfaces pair, auth-start, and logout failures", async () => {
     const failingPairClient: BridgeClient = {
       abortChat: vi.fn(),
-      connectAuth: vi.fn(),
       confirmPairing: vi.fn(),
       health: vi.fn().mockResolvedValue({
         auth: {
@@ -316,6 +355,8 @@ describe("App", () => {
       }),
       listModels: vi.fn(),
       logout: vi.fn().mockRejectedValue("bad"),
+      pollDeviceAuth: vi.fn(),
+      startDeviceAuth: vi.fn().mockRejectedValue(new Error("auth_failed")),
       startPairing: vi.fn().mockRejectedValue(new Error("pair_failed")),
       streamChat: vi.fn()
     };
@@ -333,20 +374,19 @@ describe("App", () => {
     const store = createAppStore();
     store.getState().setPairingToken("pair-token");
     renderApp(failingPairClient, "/chat", store);
-    await user.click(await screen.findByRole("button", { name: "Connect GitHub" }));
-    expect(await screen.findByText("Paste a GitHub token first")).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
+    expect(await screen.findByText("auth_failed")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Logout" }));
     expect(await screen.findByText("bridge_request_failed")).toBeInTheDocument();
   });
 
-  it("surfaces connect, send, and stop failures", async () => {
+  it("surfaces auth-poll, send, and stop failures", async () => {
     const unauthStore = createAppStore();
     unauthStore.getState().setPairingToken("pair-token");
 
     const connectClient: BridgeClient = {
       abortChat: vi.fn(),
-      connectAuth: vi.fn().mockRejectedValue(new Error("auth_failed")),
       confirmPairing: vi.fn(),
       health: vi.fn().mockResolvedValue({
         auth: {
@@ -360,15 +400,16 @@ describe("App", () => {
       }),
       listModels: vi.fn(),
       logout: vi.fn(),
+      pollDeviceAuth: vi.fn().mockRejectedValue(new Error("auth_poll_failed")),
+      startDeviceAuth: vi.fn().mockResolvedValue(createChallenge({ intervalSeconds: 1 })),
       startPairing: vi.fn(),
       streamChat: vi.fn()
     };
 
     const user = userEvent.setup();
     const connectView = renderApp(connectClient, "/chat", unauthStore);
-    await user.type(await screen.findByLabelText("GitHub token"), "ghp_1234567890");
-    await user.click(screen.getByRole("button", { name: "Connect GitHub" }));
-    expect(await screen.findByText("auth_failed")).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
+    expect(await screen.findByText("auth_poll_failed")).toBeInTheDocument();
 
     connectView.unmount();
     localStorage.clear();
@@ -381,15 +422,9 @@ describe("App", () => {
     let releaseStream: () => void = () => undefined;
     const readyClient: BridgeClient = {
       abortChat: vi.fn().mockRejectedValue(new Error("abort_failed")),
-      connectAuth: vi.fn(),
       confirmPairing: vi.fn(),
       health: vi.fn().mockResolvedValue({
-        auth: {
-          accountLabel: "dhruv2mars",
-          authenticated: true,
-          provider: "github-models",
-          tokenHint: "ghp_...7890"
-        },
+        auth: createAuthSession(),
         bridgeVersion: "1.0.0",
         protocolVersion: "2026-03-13",
         status: "ok"
@@ -401,6 +436,8 @@ describe("App", () => {
         }
       ]),
       logout: vi.fn(),
+      pollDeviceAuth: vi.fn(),
+      startDeviceAuth: vi.fn(),
       startPairing: vi.fn(),
       streamChat: vi
         .fn()
@@ -433,4 +470,42 @@ describe("App", () => {
     expect(await screen.findByText("abort_failed")).toBeInTheDocument();
     releaseStream();
   });
+
+  it("cleans up pending auth polling on unmount", async () => {
+    const store = createAppStore();
+    store.getState().setPairingToken("pair-token");
+    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+
+    const client: BridgeClient = {
+      abortChat: vi.fn(),
+      confirmPairing: vi.fn(),
+      health: vi.fn().mockResolvedValue({
+        auth: {
+          accountLabel: null,
+          authenticated: false,
+          provider: "github-models"
+        },
+        bridgeVersion: "1.0.0",
+        protocolVersion: "2026-03-13",
+        status: "ok"
+      }),
+      listModels: vi.fn(),
+      logout: vi.fn(),
+      pollDeviceAuth: vi.fn().mockResolvedValue(createPollResponse({ pollAfterSeconds: 60 })),
+      startDeviceAuth: vi.fn().mockResolvedValue(createChallenge({ intervalSeconds: 60 })),
+      startPairing: vi.fn(),
+      streamChat: vi.fn()
+    };
+
+    const view = renderApp(client, "/chat", store);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
+    expect(await screen.findByText("ABCD-EFGH")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(client.pollDeviceAuth).toHaveBeenCalledTimes(1);
+    });
+
+    view.unmount();
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+  });
+
 });

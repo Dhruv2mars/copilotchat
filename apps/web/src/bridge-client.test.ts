@@ -97,10 +97,36 @@ describe("bridge-client", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
+            deviceCode: "device-1",
+            expiresAt: "2026-03-13T10:10:00.000Z",
+            intervalSeconds: 5,
+            organization: "acme",
+            userCode: "ABCD-EFGH",
+            verificationUri: "https://github.com/login/device"
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            accountLabel: null,
+            authenticated: false,
+            organization: "acme",
+            pollAfterSeconds: 5,
+            provider: "github-models",
+            status: "pending"
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
             accountLabel: "dhruv2mars",
             authenticated: true,
+            organization: "acme",
             provider: "github-models",
-            tokenHint: "ghp_...7890"
+            status: "complete",
+            tokenHint: "ghu_...7890"
           })
         )
       )
@@ -138,12 +164,34 @@ describe("bridge-client", () => {
       token: "pair-token"
     });
     await expect(
-      client.connectAuth({
+      client.startDeviceAuth({
         organization: "acme",
-        token: "ghp_1234567890"
+        origin: "https://copilotchat.vercel.app",
+        token: "pair-token"
       })
     ).resolves.toMatchObject({
-      authenticated: true
+      deviceCode: "device-1",
+      organization: "acme"
+    });
+    await expect(
+      client.pollDeviceAuth({
+        deviceCode: "device-1",
+        origin: "https://copilotchat.vercel.app",
+        token: "pair-token"
+      })
+    ).resolves.toMatchObject({
+      authenticated: false,
+      status: "pending"
+    });
+    await expect(
+      client.pollDeviceAuth({
+        deviceCode: "device-1",
+        origin: "https://copilotchat.vercel.app",
+        token: "pair-token"
+      })
+    ).resolves.toMatchObject({
+      authenticated: true,
+      status: "complete"
     });
     await expect(client.logout()).resolves.toMatchObject({
       authenticated: false

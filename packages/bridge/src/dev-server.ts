@@ -1,7 +1,8 @@
-import type { AuthConnectRequest, BridgeStreamEvent, ChatStreamRequest } from "@copilotchat/shared";
+import type { BridgeStreamEvent, ChatStreamRequest } from "@copilotchat/shared";
 
-import { AuthSessionManager, type SecureStore } from "./auth-session-manager";
+import { AuthSessionManager, type AuthProvider, type SecureStore } from "./auth-session-manager";
 import { createBridgeServer } from "./bridge-server";
+import { GitHubDeviceFlowClient } from "./github-device-flow-client";
 import { GitHubModelsClient } from "./github-models-client";
 import { MacOsKeychainStore } from "./macos-keychain-store";
 import { ModelRegistry } from "./model-registry";
@@ -28,18 +29,7 @@ const allowedOrigin = process.env.ALLOWED_ORIGIN ?? "http://localhost:5173";
 const fakeMode = process.env.BRIDGE_FAKE_MODE === "1";
 const modelsClient = new GitHubModelsClient();
 const auth = new AuthSessionManager({
-  provider: fakeMode
-    ? {
-        async connect(input: AuthConnectRequest) {
-          return {
-            accountLabel: "fake-user",
-            organization: input.organization?.trim() || undefined,
-            token: input.token.trim(),
-            tokenHint: "fake...token"
-          };
-        }
-      }
-    : modelsClient,
+  provider: createAuthProvider(),
   store: createSecureStore()
 });
 
@@ -153,8 +143,59 @@ console.log(`bridge listening on http://127.0.0.1:${port}`);
 console.log(`allowed origin: ${allowedOrigin}`);
 console.log(fakeMode ? "bridge mode: fake" : "bridge mode: live github-models");
 
+function createAuthProvider(): AuthProvider {
+  if (fakeMode) {
+    return {
+      async pollDeviceAuthorization(input) {
+        return {
+          session: {
+            accountLabel: "fake-user",
+            organization: input.organization?.trim() || undefined,
+            token: "fake-token",
+            tokenHint: "fake...token"
+          },
+          status: "complete"
+        };
+      },
+      async startDeviceAuthorization(input) {
+        return {
+          deviceCode: "fake-device",
+          expiresAt: new Date(Date.now() + 900_000).toISOString(),
+          intervalSeconds: 1,
+          organization: input.organization?.trim() || undefined,
+          userCode: "FAKE-CODE",
+          verificationUri: "https://github.com/login/device"
+        };
+      }
+    };
+  }
+
+  return new GitHubDeviceFlowClient({
+    clientId: process.env.GITHUB_DEVICE_CLIENT_ID ?? "",
+    modelsClient,
+    openUrl: openSystemBrowser,
+    scope: process.env.GITHUB_DEVICE_SCOPE
+  });
+}
+
 function createSecureStore() {
   return process.platform === "darwin" && !fakeMode
     ? new MacOsKeychainStore()
     : new MemoryStore();
+}
+
+async function openSystemBrowser(url: string) {
+  const command =
+    process.platform === "darwin"
+      ? ["open", url]
+      : process.platform === "win32"
+        ? ["cmd", "/c", "start", "", url]
+        : ["xdg-open", url];
+
+  const processHandle = Bun.spawn(command, {
+    stderr: "ignore",
+    stdout: "ignore"
+  });
+
+  await processHandle.exited;
 }

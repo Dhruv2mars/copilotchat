@@ -1,5 +1,6 @@
 export * from "./auth-session-manager";
 export * from "./bridge-server";
+export * from "./github-device-flow-client";
 export * from "./github-models-client";
 export * from "./macos-keychain-store";
 export * from "./model-registry";

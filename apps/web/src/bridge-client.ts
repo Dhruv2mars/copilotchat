@@ -1,5 +1,8 @@
 import type {
-  AuthConnectRequest,
+  AuthDevicePollRequest,
+  AuthDevicePollResponse,
+  AuthDeviceStartRequest,
+  AuthDeviceStartResponse,
   AuthSessionResponse,
   BridgeHealth,
   BridgeStreamEvent,
@@ -15,11 +18,17 @@ type BridgeFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface BridgeClient {
   abortChat(input: { origin: string; requestId: string; token: string }): Promise<void>;
-  connectAuth(input: AuthConnectRequest): Promise<AuthSessionResponse>;
   confirmPairing(input: PairConfirmRequest): Promise<PairConfirmResponse>;
   health(): Promise<BridgeHealth>;
   listModels(input: { origin: string; token: string }): Promise<ListedModel[]>;
   logout(): Promise<AuthSessionResponse>;
+  pollDeviceAuth(input: AuthDevicePollRequest & { origin: string; token: string }): Promise<AuthDevicePollResponse>;
+  startDeviceAuth(
+    input: AuthDeviceStartRequest & {
+      origin: string;
+      token: string;
+    }
+  ): Promise<AuthDeviceStartResponse>;
   startPairing(input: PairStartRequest): Promise<PairStartResponse>;
   streamChat(
     input: {
@@ -50,11 +59,12 @@ export function createHttpBridgeClient(options: {
         method: "POST"
       });
     },
-    async connectAuth(input) {
-      return requestJson(fetchFn, `${options.baseUrl}/auth/connect`, {
+    async pollDeviceAuth(input) {
+      return requestJson(fetchFn, `${options.baseUrl}/auth/device/poll`, {
         body: JSON.stringify(input),
         headers: {
-          "content-type": "application/json"
+          "content-type": "application/json",
+          "x-bridge-token": input.token
         },
         method: "POST"
       });
@@ -80,6 +90,19 @@ export function createHttpBridgeClient(options: {
     },
     async logout() {
       return requestJson(fetchFn, `${options.baseUrl}/auth/logout`, {
+        method: "POST"
+      });
+    },
+    async startDeviceAuth(input) {
+      return requestJson(fetchFn, `${options.baseUrl}/auth/device/start`, {
+        body: JSON.stringify({
+          openInBrowser: input.openInBrowser,
+          organization: input.organization
+        }),
+        headers: {
+          "content-type": "application/json",
+          "x-bridge-token": input.token
+        },
         method: "POST"
       });
     },

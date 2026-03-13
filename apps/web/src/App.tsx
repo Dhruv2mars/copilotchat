@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ChatMessage } from "@copilotchat/shared";
+import type { AuthDeviceStartResponse, ChatMessage } from "@copilotchat/shared";
 import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
 import { useStore } from "zustand";
@@ -31,6 +31,7 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
     retry: false,
     staleTime: 5_000
   });
+  const refetchHealth = healthQuery.refetch;
 
   const isReady = Boolean(pairingToken && healthQuery.data?.auth.authenticated);
   const modelsQuery = useQuery({
@@ -46,7 +47,7 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
   const [selectedModel, setSelectedModel] = useState("");
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
   const [statusNote, setStatusNote] = useState("");
-  const [tokenDraft, setTokenDraft] = useState("");
+  const [authChallenge, setAuthChallenge] = useState<AuthDeviceStartResponse | null>(null);
   const [organizationDraft, setOrganizationDraft] = useState("");
   const deferredSearch = useDeferredValue(sessionSearch);
 
@@ -65,6 +66,51 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
       store.getState().createSession(createSessionId());
     });
   }, [activeSessionId, isReady, store]);
+
+  useEffect(() => {
+    if (!authChallenge || !pairingToken) {
+      return;
+    }
+
+    let cancelled = false;
+    let timerId: number | null = null;
+
+    const pollOnce = async () => {
+      try {
+        const response = await client.pollDeviceAuth({
+          deviceCode: authChallenge.deviceCode,
+          origin: window.location.origin,
+          token: pairingToken
+        });
+
+        /* v8 ignore next */
+        if (cancelled) return;
+
+        if (response.status === "pending") {
+          setStatusNote("Waiting for GitHub approval");
+          /* v8 ignore next */
+          timerId = window.setTimeout(() => void pollOnce(), (response.pollAfterSeconds ?? authChallenge.intervalSeconds) * 1000);
+          return;
+        }
+
+        setAuthChallenge(null);
+        setStatusNote("GitHub connected");
+        await refetchHealth();
+      } catch (errorValue) {
+        setAuthChallenge(null);
+        setStatusNote(readErrorMessage(errorValue));
+      }
+    };
+
+    void pollOnce();
+
+    return () => {
+      cancelled = true;
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, [authChallenge, client, pairingToken, refetchHealth]);
 
   const runtime = healthQuery.isError
     ? "offline"
@@ -94,27 +140,22 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
       });
       store.getState().setPairingToken(session.token);
       setStatusNote("Bridge paired");
-      await healthQuery.refetch();
+      await refetchHealth();
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
     }
   }
 
-  async function connectCopilot() {
-    const token = tokenDraft.trim();
-    if (!token) {
-      setStatusNote("Paste a GitHub token first");
-      return;
-    }
-
+  async function startGitHubAuth() {
     try {
-      await client.connectAuth({
+      const challenge = await client.startDeviceAuth({
+        openInBrowser: true,
         organization: organizationDraft.trim() || undefined,
-        token
+        origin: window.location.origin,
+        token: pairingToken as string
       });
-      setTokenDraft("");
-      setStatusNote("GitHub Models connected");
-      await healthQuery.refetch();
+      setAuthChallenge(challenge);
+      setStatusNote("Approve GitHub in the browser");
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
     }
@@ -202,8 +243,9 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
   async function logout() {
     try {
       await client.logout();
+      setAuthChallenge(null);
       setStatusNote("Local bridge logged out");
-      await healthQuery.refetch();
+      await refetchHealth();
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
     }
@@ -269,7 +311,7 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
               <ChatRoute
                 activeSession={activeSession}
                 accountLabel={healthQuery.data?.auth.accountLabel ?? "GitHub Models"}
-                connectCopilot={connectCopilot}
+                authChallenge={authChallenge}
                 organizationDraft={organizationDraft}
                 models={modelsQuery.data ?? []}
                 pairBridge={pairBridge}
@@ -277,6 +319,7 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
                 runtime={runtime}
                 selectedModel={selectedModel}
                 sendMessage={sendMessage}
+                startGitHubAuth={startGitHubAuth}
                 setOrganizationDraft={setOrganizationDraft}
                 setDraft={(value) => {
                   if (activeSession) {
@@ -284,14 +327,12 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
                   }
                 }}
                 setSelectedModel={setSelectedModel}
-                setTokenDraft={setTokenDraft}
                 statusNote={statusNote}
                 stopStreaming={
                   pendingRequestId && pairingToken
                     ? () => stopStreaming(pendingRequestId, pairingToken)
                     : null
                 }
-                tokenDraft={tokenDraft}
               />
             }
             path="/chat"
@@ -331,7 +372,7 @@ function ChatRoute(props: {
     messages: ChatMessage[];
   } | null;
   accountLabel: string;
-  connectCopilot(): Promise<void>;
+  authChallenge: AuthDeviceStartResponse | null;
   models: { id: string; label: string }[];
   organizationDraft: string;
   pairBridge(): Promise<void>;
@@ -339,13 +380,12 @@ function ChatRoute(props: {
   runtime: "offline" | "ready" | "unauthenticated" | "unpaired";
   selectedModel: string;
   sendMessage(): Promise<void>;
+  startGitHubAuth(): Promise<void>;
   setDraft(value: string): void;
   setOrganizationDraft(value: string): void;
   setSelectedModel(value: string): void;
-  setTokenDraft(value: string): void;
   statusNote: string;
   stopStreaming: (() => Promise<void>) | null;
-  tokenDraft: string;
 }) {
   if (props.runtime === "offline") {
     return <InstallRoute />;
@@ -369,18 +409,9 @@ function ChatRoute(props: {
     return (
       <section className="hero-card">
         <p className="eyebrow">GitHub auth</p>
-        <h2>Connect GitHub Models</h2>
-        <p>Paste a GitHub token with model access. Token stays in the local bridge keychain.</p>
+        <h2>Connect with GitHub</h2>
+        <p>The local bridge owns auth. Browser never receives the GitHub secret.</p>
         {props.statusNote ? <p>{props.statusNote}</p> : null}
-        <label className="search-box">
-          <span>GitHub token</span>
-          <input
-            onChange={(event) => props.setTokenDraft(event.target.value)}
-            placeholder="github_pat_..."
-            type="password"
-            value={props.tokenDraft}
-          />
-        </label>
         <label className="search-box">
           <span>Organization slug optional</span>
           <input
@@ -389,8 +420,18 @@ function ChatRoute(props: {
             value={props.organizationDraft}
           />
         </label>
-        <button className="primary-button" onClick={() => void props.connectCopilot()} type="button">
-          Connect GitHub
+        {props.authChallenge ? (
+          <div className="status-card">
+            <p>Enter this code on GitHub:</p>
+            <h3>{props.authChallenge.userCode}</h3>
+            <p>Expires {new Date(props.authChallenge.expiresAt).toLocaleTimeString()}</p>
+            <a href={props.authChallenge.verificationUri} rel="noreferrer" target="_blank">
+              Open GitHub verification
+            </a>
+          </div>
+        ) : null}
+        <button className="primary-button" onClick={() => void props.startGitHubAuth()} type="button">
+          Connect with GitHub
         </button>
       </section>
     );
