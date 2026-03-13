@@ -1,25 +1,26 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { AppBootstrapResponse, AppDeviceAuthPollResponse } from "@copilotchat/shared";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type {
-  AuthDevicePollResponse,
-  AuthDeviceStartResponse,
-  AuthSessionResponse,
-  BridgeHealth,
-  BridgeStreamEvent,
-  ChatStreamRequest,
-  ListedModel,
-  PairConfirmResponse,
-  PairStartResponse
-} from "@copilotchat/shared";
-
-import { App, ChatRoute, formatRuntimeLabel, readErrorMessage, runtimeSummary } from "./App";
+import { App } from "./App";
 import { createAppStore } from "./app-store";
-import type { BridgeClient } from "./bridge-client";
+import type { BffClient } from "./bff-client";
 
-function renderApp(client: BridgeClient, path = "/", store = createAppStore()) {
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+
+  return {
+    promise,
+    resolve
+  };
+}
+
+function renderApp(client: BffClient, path = "/chat") {
   window.history.pushState({}, "", path);
 
   return render(
@@ -34,620 +35,408 @@ function renderApp(client: BridgeClient, path = "/", store = createAppStore()) {
         })
       }
     >
-      <App client={client} store={store} />
+      <App client={client} store={createAppStore()} />
     </QueryClientProvider>
   );
 }
 
-function createChallenge(overrides?: Partial<AuthDeviceStartResponse>): AuthDeviceStartResponse {
-  return {
-    deviceCode: "device-1",
-    expiresAt: "2026-03-13T10:10:00.000Z",
-    intervalSeconds: 5,
-    organization: "acme",
-    userCode: "ABCD-EFGH",
-    verificationUri: "https://github.com/login/device",
-    ...overrides
-  };
-}
-
-function createAuthSession(overrides?: Partial<AuthSessionResponse>): AuthSessionResponse {
-  return {
-    accountLabel: "dhruv2mars",
-    authenticated: true,
-    organization: "acme",
-    provider: "github-models",
-    tokenHint: "ghu_...7890",
-    ...overrides
-  };
-}
-
-function createPollResponse(overrides?: Partial<AuthDevicePollResponse>): AuthDevicePollResponse {
-  return {
-    accountLabel: null,
-    authenticated: false,
-    organization: "acme",
-    pollAfterSeconds: 5,
-    provider: "github-models",
-    status: "pending",
-    ...overrides
-  };
-}
-
-afterEach(() => {
-  vi.useRealTimers();
-});
-
 describe("App", () => {
-  it("covers runtime and error helper branches", () => {
-    expect(formatRuntimeLabel("ready")).toBe("Ready");
-    expect(formatRuntimeLabel("offline")).toBe("Offline");
-    expect(formatRuntimeLabel("unpaired")).toBe("Unpaired");
-    expect(formatRuntimeLabel("unauthenticated")).toBe("Auth required");
-
-    expect(runtimeSummary("ready")).toBe("Inference path armed.");
-    expect(runtimeSummary("offline")).toBe("Bridge not reachable on localhost.");
-    expect(runtimeSummary("unpaired")).toBe("Pairing required before protected calls.");
-    expect(runtimeSummary("unauthenticated")).toBe("GitHub auth still pending in bridge.");
-
-    expect(readErrorMessage(new Error("boom"))).toBe("boom");
-    expect(readErrorMessage("bad")).toBe("bad");
-    expect(readErrorMessage({ nope: true })).toBe("bridge_request_failed");
-  });
-
-  it("shows install help when bridge is offline", async () => {
-    const client: BridgeClient = {
-      abortChat: vi.fn(),
-      confirmPairing: vi.fn(),
-      health: vi.fn().mockRejectedValue(new Error("offline")),
-      listModels: vi.fn(),
-      logout: vi.fn(),
-      pollDeviceAuth: vi.fn(),
-      startDeviceAuth: vi.fn(),
-      startPairing: vi.fn(),
-      streamChat: vi.fn()
-    };
-
-    renderApp(client, "/chat");
-
-    expect(await screen.findByText("Install the bridge")).toBeInTheDocument();
-    expect(screen.getByText("macOS")).toBeInTheDocument();
-  });
-
-  it("marks install nav active and shows no-match session copy", async () => {
-    const store = createAppStore();
-    store.getState().setPairingToken("pair-token");
-    store.getState().createSession("session-1");
-
-    const client: BridgeClient = {
-      abortChat: vi.fn(),
-      confirmPairing: vi.fn(),
-      health: vi.fn().mockResolvedValue({
-        auth: createAuthSession(),
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
+  it("runs device auth and completes a chat session", async () => {
+    const client: BffClient = {
+      authWithCli: vi.fn(),
+      bootstrap: vi.fn().mockResolvedValue({
+        auth: {
+          accountLabel: null,
+          authenticated: false,
+          provider: "github-models"
+        },
+        devCliAvailable: false,
+        models: []
       }),
-      listModels: vi.fn().mockResolvedValue([
-        {
-          id: "gpt-4.1",
-          label: "GPT-4.1"
+      completeChat: vi.fn().mockResolvedValue({
+        message: {
+          content: "hello test",
+          id: "assistant-1",
+          role: "assistant"
+        },
+        usage: {
+          inputTokens: 13,
+          outputTokens: 3
         }
-      ]),
+      }),
       logout: vi.fn(),
-      pollDeviceAuth: vi.fn(),
-      startDeviceAuth: vi.fn(),
-      startPairing: vi.fn(),
-      streamChat: vi.fn()
+      pollDeviceAuth: vi
+        .fn()
+        .mockResolvedValueOnce({
+          pollAfterSeconds: 1,
+          status: "pending"
+        })
+        .mockResolvedValueOnce({
+          auth: {
+            accountLabel: "Dhruv2mars",
+            authenticated: true,
+            provider: "github-models",
+            tokenHint: "gho_...7890"
+          },
+          devCliAvailable: false,
+          models: [
+            {
+              id: "openai/gpt-4.1-mini",
+              label: "OpenAI GPT-4.1 Mini"
+            },
+            {
+              id: "openai/gpt-5-mini",
+              label: "OpenAI GPT-5 Mini"
+            }
+          ],
+          status: "complete"
+        }),
+      startDeviceAuth: vi.fn().mockResolvedValue({
+        deviceCode: "device-1",
+        expiresAt: "2026-03-13T18:00:00.000Z",
+        intervalSeconds: 1,
+        userCode: "ABCD-EFGH",
+        verificationUri: "https://github.com/login/device"
+      })
     };
 
-    renderApp(client, "/install", store);
-
-    expect(await screen.findByRole("link", { name: "Install" })).toHaveClass("active");
+    renderApp(client);
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("link", { name: "Chat" }));
-    await user.type(await screen.findByLabelText("Search sessions"), "zzz");
+    expect(await screen.findByRole("heading", { name: "Connect with GitHub" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Connect with GitHub" }));
+    expect(await screen.findByText("ABCD-EFGH")).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(client.pollDeviceAuth).toHaveBeenCalledTimes(2);
+    });
+
+    await user.selectOptions(await screen.findByLabelText("Model"), "openai/gpt-5-mini");
+    await user.type(screen.getByLabelText("Message"), "Ship it");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("hello test")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Dhruv2mars" })).toBeInTheDocument();
+    expect(screen.getAllByText("3 output tokens")).not.toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "New thread" }));
+    await user.type(screen.getByLabelText("Search sessions"), "Ship");
+    await user.click(screen.getByRole("button", { name: /Ship it/i }));
+
+    expect(screen.getByText("hello test")).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Search sessions"));
+    await user.type(screen.getByLabelText("Search sessions"), "zzz");
     expect(screen.getByText("No search matches.")).toBeInTheDocument();
   });
 
-  it("pairs, runs github device auth, and streams a chat session", async () => {
-    const healthQueue: BridgeHealth[] = [
-      {
-        auth: {
-          accountLabel: null,
-          authenticated: false,
-          provider: "github-models"
-        },
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
-      },
-      {
-        auth: {
-          accountLabel: null,
-          authenticated: false,
-          provider: "github-models"
-        },
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
-      },
-      {
-        auth: createAuthSession(),
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
-      }
-    ];
-
-    const client: BridgeClient = {
-      abortChat: vi.fn().mockResolvedValue(undefined),
-      confirmPairing: vi.fn().mockResolvedValue({
-        pairedAt: "2026-03-13T10:00:00.000Z",
-        token: "pair-token"
-      } satisfies PairConfirmResponse),
-      health: vi.fn().mockImplementation(async () => healthQueue.shift() ?? healthQueue.at(-1)),
-      listModels: vi.fn().mockResolvedValue([
-        {
-          id: "gpt-4.1",
-          label: "GPT-4.1"
-        },
-        {
-          id: "gpt-4.5",
-          label: "GPT-4.5"
-        }
-      ] satisfies ListedModel[]),
-      logout: vi.fn().mockResolvedValue({
+  it("supports dev cli auth, diagnostics, and logout", async () => {
+    const health = {
+      auth: {
         accountLabel: null,
         authenticated: false,
-        provider: "github-models"
-      }),
-      pollDeviceAuth: vi.fn().mockResolvedValue(
-        createPollResponse({
-          ...createAuthSession(),
+        provider: "github-models" as const
+      },
+      devCliAvailable: true,
+      models: []
+    };
+
+    const client: BffClient = {
+      authWithCli: vi.fn().mockResolvedValue({
+        auth: {
+          accountLabel: "Dhruv2mars",
           authenticated: true,
-          status: "complete"
-        })
-      ),
-      startDeviceAuth: vi.fn().mockResolvedValue(createChallenge()),
-      startPairing: vi.fn().mockResolvedValue({
-        code: "ABC123",
-        expiresAt: "2026-03-13T10:01:00.000Z",
-        origin: "http://localhost:4173",
-        pairingId: "pairing-1"
-      } satisfies PairStartResponse),
-      streamChat: vi.fn().mockImplementation(
-        async (
-          _request: { origin: string; request: ChatStreamRequest; token: string },
-          onEvent: (event: BridgeStreamEvent) => void
-        ) => {
-          onEvent({
-            data: "Bridge says hi",
-            type: "assistant_delta"
-          });
-          onEvent({
-            type: "assistant_done",
-            usage: {
-              inputTokens: 1,
-              outputTokens: 3
-            }
-          });
-        }
-      )
-    };
-
-    renderApp(client, "/chat");
-
-    const user = userEvent.setup();
-
-    await user.click(await screen.findByRole("button", { name: "Pair bridge" }));
-    await waitFor(() => {
-      expect(client.confirmPairing).toHaveBeenCalled();
-    });
-
-    await user.type(await screen.findByLabelText("Organization slug optional"), "acme");
-    await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
-
-    expect(client.startDeviceAuth).toHaveBeenCalledWith({
-      openInBrowser: true,
-      organization: "acme",
-      origin: "http://localhost:3000",
-      token: "pair-token"
-    });
-    await waitFor(() => {
-      expect(client.pollDeviceAuth).toHaveBeenCalledTimes(1);
-      expect(client.listModels).toHaveBeenCalled();
-    });
-
-    await user.click(screen.getByRole("button", { name: "Send" }));
-    expect(client.streamChat).not.toHaveBeenCalled();
-    await user.selectOptions(screen.getByRole("combobox"), "gpt-4.5");
-    await user.type(await screen.findByPlaceholderText("Ask through your local Copilot bridge"), "Ship it");
-    await user.click(screen.getByRole("button", { name: "Send" }));
-
-    expect(await screen.findByText("Bridge says hi")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "dhruv2mars" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox")).toHaveValue("gpt-4.5");
-    await user.type(screen.getByLabelText("Search sessions"), "Ship");
-    await user.clear(screen.getByLabelText("Search sessions"));
-    await user.click(screen.getByRole("button", { name: "New thread" }));
-    await user.click(screen.getByRole("button", { name: /Ship it/ }));
-  });
-
-  it("shows diagnostics, stops generation, surfaces stream errors, and logs out", async () => {
-    const store = createAppStore();
-    store.getState().setPairingToken("pair-token");
-    store.getState().createSession("session-1");
-    store.getState().setDraft("session-1", "Stop now");
-
-    let releaseStream: () => void = () => undefined;
-    const healthQueue: BridgeHealth[] = [
-      {
-        auth: createAuthSession(),
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
-      },
-      {
-        auth: {
-          accountLabel: null,
-          authenticated: false,
-          provider: "github-models"
+          provider: "github-models",
+          tokenHint: "gho_...7890"
         },
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
-      }
-    ];
-
-    const client: BridgeClient = {
-      abortChat: vi.fn().mockImplementation(async () => {
-        releaseStream();
+        devCliAvailable: true,
+        models: [
+          {
+            id: "openai/gpt-4.1-mini",
+            label: "OpenAI GPT-4.1 Mini"
+          }
+        ]
       }),
-      confirmPairing: vi.fn(),
-      health: vi.fn().mockImplementation(async () => healthQueue.shift() ?? healthQueue.at(-1)),
-      listModels: vi.fn().mockResolvedValue([
-        {
-          id: "gpt-4.1",
-          label: "GPT-4.1"
-        }
-      ]),
-      logout: vi.fn().mockResolvedValue({
-        accountLabel: null,
-        authenticated: false,
-        provider: "github-models"
-      }),
+      bootstrap: vi.fn().mockResolvedValue(health),
+      completeChat: vi.fn(),
+      logout: vi.fn().mockResolvedValue(health),
       pollDeviceAuth: vi.fn(),
-      startDeviceAuth: vi.fn(),
-      startPairing: vi.fn(),
-      streamChat: vi.fn().mockImplementation(
-        async (
-          _request: { origin: string; request: ChatStreamRequest; token: string },
-          onEvent: (event: BridgeStreamEvent) => void
-        ) => {
-          onEvent({
-            data: "partial",
-            type: "assistant_delta"
-          });
-          onEvent({
-            message: "stream interrupted",
-            type: "assistant_error"
-          });
-
-          await new Promise<void>((resolve) => {
-            releaseStream = resolve;
-          });
-        }
-      )
-    };
-
-    renderApp(client, "/diagnostics", store);
-
-    expect(await screen.findByText("Runtime facts")).toBeInTheDocument();
-    expect(screen.getByText("yes")).toBeInTheDocument();
-
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("link", { name: "Chat" }));
-    await user.click(await screen.findByRole("button", { name: "Send" }));
-    expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
-    expect(await screen.findByText("partial")).toBeInTheDocument();
-    expect(await screen.findAllByText("stream interrupted")).toHaveLength(3);
-
-    await user.click(screen.getByRole("button", { name: "Stop" }));
-    await waitFor(() => {
-      expect(client.abortChat).toHaveBeenCalled();
-    });
-    expect(await screen.findAllByText("Generation stopped")).toHaveLength(3);
-
-    await user.click(screen.getByRole("button", { name: "Logout" }));
-    expect(await screen.findByRole("button", { name: "Connect with GitHub" })).toBeInTheDocument();
-  });
-
-  it("shows diagnostics when no pairing token exists", async () => {
-    const client: BridgeClient = {
-      abortChat: vi.fn(),
-      confirmPairing: vi.fn(),
-      health: vi.fn().mockResolvedValue({
-        auth: {
-          accountLabel: null,
-          authenticated: false,
-          provider: "github-models"
-        },
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
-      }),
-      listModels: vi.fn(),
-      logout: vi.fn(),
-      pollDeviceAuth: vi.fn(),
-      startDeviceAuth: vi.fn(),
-      startPairing: vi.fn(),
-      streamChat: vi.fn()
+      startDeviceAuth: vi.fn()
     };
 
     renderApp(client, "/diagnostics");
 
-    expect(await screen.findByText("Runtime facts")).toBeInTheDocument();
-    expect(screen.getByText("no")).toBeInTheDocument();
-  });
-
-  it("shows empty ready thread state", async () => {
-    const store = createAppStore();
-    store.getState().setPairingToken("pair-token");
-    store.getState().createSession("session-1");
-
-    const client: BridgeClient = {
-      abortChat: vi.fn(),
-      confirmPairing: vi.fn(),
-      health: vi.fn().mockResolvedValue({
-        auth: createAuthSession(),
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
-      }),
-      listModels: vi.fn().mockResolvedValue([
-        {
-          id: "gpt-4.1",
-          label: "GPT-4.1"
-        }
-      ]),
-      logout: vi.fn(),
-      pollDeviceAuth: vi.fn(),
-      startDeviceAuth: vi.fn(),
-      startPairing: vi.fn(),
-      streamChat: vi.fn()
-    };
-
-    renderApp(client, "/chat", store);
-
-    expect(await screen.findByRole("heading", { name: "Ask through your local Copilot bridge" })).toBeInTheDocument();
-    expect(screen.getByText("Ready for chat")).toBeInTheDocument();
-  });
-
-  it("shows ready state before first session hydrates", async () => {
-    const store = createAppStore();
-    store.getState().setPairingToken("pair-token");
-
-    const client: BridgeClient = {
-      abortChat: vi.fn(),
-      confirmPairing: vi.fn(),
-      health: vi.fn().mockResolvedValue({
-        auth: createAuthSession(),
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
-      }),
-      listModels: vi.fn().mockResolvedValue([
-        {
-          id: "gpt-4.1",
-          label: "GPT-4.1"
-        }
-      ]),
-      logout: vi.fn(),
-      pollDeviceAuth: vi.fn(),
-      startDeviceAuth: vi.fn(),
-      startPairing: vi.fn(),
-      streamChat: vi.fn()
-    };
-
-    renderApp(client, "/chat", store);
-
-    expect(await screen.findByRole("heading", { name: "Ask through your local Copilot bridge" })).toBeInTheDocument();
-  });
-
-  it("renders empty ready state when active session is null", () => {
-    render(
-      <ChatRoute
-        activeSession={null}
-        accountLabel="dhruv2mars"
-        authChallenge={null}
-        models={[]}
-        organizationDraft=""
-        pairBridge={vi.fn()}
-        pendingRequestId={null}
-        runtime="ready"
-        selectedModel=""
-        sendMessage={vi.fn()}
-        setDraft={vi.fn()}
-        setOrganizationDraft={vi.fn()}
-        setSelectedModel={vi.fn()}
-        startGitHubAuth={vi.fn()}
-        statusNote=""
-        stopStreaming={null}
-      />
-    );
-
-    expect(screen.getByRole("heading", { name: "Ask through your local Copilot bridge" })).toBeInTheDocument();
-  });
-
-  it("surfaces pair, auth-start, and logout failures", async () => {
-    const failingPairClient: BridgeClient = {
-      abortChat: vi.fn(),
-      confirmPairing: vi.fn(),
-      health: vi.fn().mockResolvedValue({
-        auth: {
-          accountLabel: null,
-          authenticated: false,
-          provider: "github-models"
-        },
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
-      }),
-      listModels: vi.fn(),
-      logout: vi.fn().mockRejectedValue("bad"),
-      pollDeviceAuth: vi.fn(),
-      startDeviceAuth: vi.fn().mockRejectedValue(new Error("auth_failed")),
-      startPairing: vi.fn().mockRejectedValue(new Error("pair_failed")),
-      streamChat: vi.fn()
-    };
-
-    const pairView = renderApp(failingPairClient, "/chat");
-
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Pair bridge" }));
-    await waitFor(() => {
-      expect(failingPairClient.startPairing).toHaveBeenCalled();
-    });
+    expect(await screen.findByRole("heading", { name: "Session facts" })).toBeInTheDocument();
 
-    pairView.unmount();
-    localStorage.clear();
-    const store = createAppStore();
-    store.getState().setPairingToken("pair-token");
-    renderApp(failingPairClient, "/chat", store);
-    await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
-    expect(await screen.findAllByText("auth_failed")).toHaveLength(2);
+    await user.click(screen.getByRole("link", { name: "Chat" }));
+    await user.click(await screen.findByRole("button", { name: "Use local GitHub CLI" }));
+
+    expect(await screen.findByRole("heading", { name: "Dhruv2mars" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "Diagnostics" }));
+    expect(await screen.findByText("yes")).toBeInTheDocument();
+    expect(screen.getByText("OpenAI GPT-4.1 Mini")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Logout" }));
-    expect(await screen.findAllByText("bad")).toHaveLength(2);
+    await user.click(screen.getByRole("link", { name: "Chat" }));
+    expect(await screen.findByRole("button", { name: "Connect with GitHub" })).toBeInTheDocument();
   });
 
-  it("surfaces auth-poll, send, and stop failures", async () => {
-    const unauthStore = createAppStore();
-    unauthStore.getState().setPairingToken("pair-token");
-
-    const connectClient: BridgeClient = {
-      abortChat: vi.fn(),
-      confirmPairing: vi.fn(),
-      health: vi.fn().mockResolvedValue({
+  it("surfaces chat and auth failures", async () => {
+    const client: BffClient = {
+      authWithCli: vi.fn().mockRejectedValue(new Error("cli_failed")),
+      bootstrap: vi.fn().mockResolvedValue({
         auth: {
-          accountLabel: null,
-          authenticated: false,
-          provider: "github-models"
+          accountLabel: "Dhruv2mars",
+          authenticated: true,
+          provider: "github-models",
+          tokenHint: "gho_...7890"
         },
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
+        devCliAvailable: true,
+        models: [
+          {
+            id: "openai/gpt-4.1-mini",
+            label: "OpenAI GPT-4.1 Mini"
+          }
+        ]
       }),
-      listModels: vi.fn(),
-      logout: vi.fn(),
-      pollDeviceAuth: vi.fn().mockRejectedValue(new Error("auth_poll_failed")),
-      startDeviceAuth: vi.fn().mockResolvedValue(createChallenge({ intervalSeconds: 1 })),
-      startPairing: vi.fn(),
-      streamChat: vi.fn()
+      completeChat: vi.fn().mockRejectedValue(new Error("chat_failed")),
+      logout: vi.fn().mockRejectedValue("logout_failed"),
+      pollDeviceAuth: vi.fn(),
+      startDeviceAuth: vi.fn().mockRejectedValue(new Error("auth_start_failed"))
     };
+
+    const firstRender = renderApp(client);
 
     const user = userEvent.setup();
-    const connectView = renderApp(connectClient, "/chat", unauthStore);
-    await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
-    expect(await screen.findAllByText("auth_poll_failed")).toHaveLength(2);
-
-    connectView.unmount();
-    localStorage.clear();
-
-    const readyStore = createAppStore();
-    readyStore.getState().setPairingToken("pair-token");
-    readyStore.getState().createSession("session-1");
-    readyStore.getState().setDraft("session-1", "Ship it");
-
-    let releaseStream: () => void = () => undefined;
-    const readyClient: BridgeClient = {
-      abortChat: vi.fn().mockRejectedValue(new Error("abort_failed")),
-      confirmPairing: vi.fn(),
-      health: vi.fn().mockResolvedValue({
-        auth: createAuthSession(),
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
-      }),
-      listModels: vi.fn().mockResolvedValue([
-        {
-          id: "gpt-4.1",
-          label: "GPT-4.1"
-        }
-      ]),
-      logout: vi.fn(),
-      pollDeviceAuth: vi.fn(),
-      startDeviceAuth: vi.fn(),
-      startPairing: vi.fn(),
-      streamChat: vi
-        .fn()
-        .mockRejectedValueOnce(new Error("send_failed"))
-        .mockImplementationOnce(
-          async (
-            _request: { origin: string; request: ChatStreamRequest; token: string },
-            onEvent: (event: BridgeStreamEvent) => void
-          ) => {
-            onEvent({
-              data: "partial",
-              type: "assistant_delta"
-            });
-
-            await new Promise<void>((resolve) => {
-              releaseStream = resolve;
-            });
-          }
-        )
-    };
-
-    renderApp(readyClient, "/chat", readyStore);
-    await user.click(await screen.findByRole("button", { name: "Send" }));
-    expect(await screen.findAllByText("send_failed")).toHaveLength(3);
-
-    readyStore.getState().setDraft("session-1", "Try again");
+    await user.type(await screen.findByLabelText("Message"), "Ship it");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await screen.findByRole("button", { name: "Stop" });
-    await user.click(screen.getByRole("button", { name: "Stop" }));
-    expect(await screen.findAllByText("abort_failed")).toHaveLength(3);
-    releaseStream();
+    expect(await screen.findAllByText("chat_failed")).toHaveLength(3);
+
+    await user.click(screen.getByRole("button", { name: "Logout" }));
+    expect(await screen.findAllByText("logout_failed")).toHaveLength(3);
+    firstRender.unmount();
+
+    renderApp(
+      {
+        ...client,
+        bootstrap: vi.fn().mockResolvedValue({
+          auth: {
+            accountLabel: null,
+            authenticated: false,
+            provider: "github-models"
+          },
+          devCliAvailable: true,
+          models: []
+        })
+      },
+      "/chat"
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
+    expect(await screen.findAllByText("auth_start_failed")).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Use local GitHub CLI" }));
+    expect(await screen.findAllByText("cli_failed")).toHaveLength(2);
   });
 
-  it("cleans up pending auth polling on unmount", async () => {
-    const store = createAppStore();
-    store.getState().setPairingToken("pair-token");
-    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+  it("covers loading, access, and fallback error states", async () => {
+    const loadingClient: BffClient = {
+      authWithCli: vi.fn(),
+      bootstrap: vi.fn(() => new Promise<AppBootstrapResponse>(() => undefined)),
+      completeChat: vi.fn(),
+      logout: vi.fn(),
+      pollDeviceAuth: vi.fn(),
+      startDeviceAuth: vi.fn()
+    };
 
-    const client: BridgeClient = {
-      abortChat: vi.fn(),
-      confirmPairing: vi.fn(),
-      health: vi.fn().mockResolvedValue({
+    const loadingView = renderApp(loadingClient);
+    expect(await screen.findByRole("heading", { name: "Loading session" })).toBeInTheDocument();
+    loadingView.unmount();
+
+    const accessClient: BffClient = {
+      authWithCli: vi.fn().mockRejectedValue({}),
+      bootstrap: vi.fn().mockResolvedValue({
         auth: {
           accountLabel: null,
           authenticated: false,
           provider: "github-models"
         },
-        bridgeVersion: "1.0.0",
-        protocolVersion: "2026-03-13",
-        status: "ok"
+        devCliAvailable: true,
+        models: []
       }),
-      listModels: vi.fn(),
+      completeChat: vi.fn(),
       logout: vi.fn(),
-      pollDeviceAuth: vi.fn().mockResolvedValue(createPollResponse({ pollAfterSeconds: 60 })),
-      startDeviceAuth: vi.fn().mockResolvedValue(createChallenge({ intervalSeconds: 60 })),
-      startPairing: vi.fn(),
-      streamChat: vi.fn()
+      pollDeviceAuth: vi.fn().mockResolvedValueOnce({ status: "pending" }).mockImplementation(() => new Promise(() => undefined)),
+      startDeviceAuth: vi.fn().mockRejectedValueOnce({}).mockResolvedValueOnce({
+        deviceCode: "device-2",
+        expiresAt: "2026-03-13T18:05:00.000Z",
+        intervalSeconds: 60,
+        userCode: "WXYZ-1234",
+        verificationUri: "https://github.com/login/device"
+      })
     };
 
-    const view = renderApp(client, "/chat", store);
-    fireEvent.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
-    expect(await screen.findByText("ABCD-EFGH")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(client.pollDeviceAuth).toHaveBeenCalledTimes(1);
-    });
+    renderApp(accessClient);
 
-    view.unmount();
-    expect(clearTimeoutSpy).toHaveBeenCalled();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
+    expect(await screen.findAllByText("github_bff_request_failed")).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Use local GitHub CLI" }));
+    expect(await screen.findAllByText("github_bff_request_failed")).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: "Connect with GitHub" }));
+    expect(await screen.findByText("WXYZ-1234")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "Access" }));
+    expect(await screen.findByRole("heading", { name: "No bridge install required" })).toBeInTheDocument();
+    expect(screen.getByText("Local GitHub CLI auth is enabled.")).toBeInTheDocument();
+    expect(screen.getByText("Device code active and waiting for approval.")).toBeInTheDocument();
+
+    const noCliClient: BffClient = {
+      ...accessClient,
+      bootstrap: vi.fn().mockResolvedValue({
+        auth: {
+          accountLabel: null,
+          authenticated: false,
+          provider: "github-models"
+        },
+        devCliAvailable: false,
+        models: []
+      }),
+      startDeviceAuth: vi.fn(),
+      pollDeviceAuth: vi.fn()
+    };
+
+    renderApp(noCliClient, "/access");
+    expect(await screen.findByText("Local GitHub CLI auth is disabled.")).toBeInTheDocument();
+    expect(screen.getByText("No device flow request active.")).toBeInTheDocument();
   });
 
+  it("covers auth poll cleanup, auth poll failures, and empty send guards", async () => {
+    const deferredPoll = createDeferred<{ pollAfterSeconds: number; status: "pending" }>();
+    const cleanupClient: BffClient = {
+      authWithCli: vi.fn(),
+      bootstrap: vi.fn().mockResolvedValue({
+        auth: {
+          accountLabel: null,
+          authenticated: false,
+          provider: "github-models"
+        },
+        devCliAvailable: false,
+        models: []
+      }),
+      completeChat: vi.fn(),
+      logout: vi.fn(),
+      pollDeviceAuth: vi.fn(() => deferredPoll.promise),
+      startDeviceAuth: vi.fn().mockResolvedValue({
+        deviceCode: "device-3",
+        expiresAt: "2026-03-13T18:10:00.000Z",
+        intervalSeconds: 60,
+        userCode: "LMNO-4567",
+        verificationUri: "https://github.com/login/device"
+      })
+    };
+
+    const cleanupView = renderApp(cleanupClient);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
+    expect(await screen.findByText("LMNO-4567")).toBeInTheDocument();
+
+    cleanupView.unmount();
+    await act(async () => {
+      deferredPoll.resolve({
+        pollAfterSeconds: 60,
+        status: "pending"
+      });
+      await Promise.resolve();
+    });
+
+    const pollFailureClient: BffClient = {
+      ...cleanupClient,
+      pollDeviceAuth: vi.fn().mockRejectedValue(new Error("poll_failed"))
+    };
+
+    renderApp(pollFailureClient);
+    await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
+    expect(await screen.findAllByText("poll_failed")).toHaveLength(2);
+
+    const sendGuardClient: BffClient = {
+      authWithCli: vi.fn(),
+      bootstrap: vi.fn().mockResolvedValue({
+        auth: {
+          accountLabel: "Dhruv2mars",
+          authenticated: true,
+          provider: "github-models",
+          tokenHint: "gho_...7890"
+        },
+        devCliAvailable: false,
+        models: [
+          {
+            id: "openai/gpt-4.1-mini",
+            label: "OpenAI GPT-4.1 Mini"
+          }
+        ]
+      }),
+      completeChat: vi.fn(),
+      logout: vi.fn(),
+      pollDeviceAuth: vi.fn(),
+      startDeviceAuth: vi.fn()
+    };
+
+    renderApp(sendGuardClient);
+    await user.click(await screen.findByRole("button", { name: "Send" }));
+    expect(sendGuardClient.completeChat).not.toHaveBeenCalled();
+  });
+
+  it("clears device auth state after successful cli auth", async () => {
+    const client: BffClient = {
+      authWithCli: vi.fn().mockResolvedValue({
+        auth: {
+          accountLabel: "Dhruv2mars",
+          authenticated: true,
+          provider: "github-models",
+          tokenHint: "gho_...7890"
+        },
+        devCliAvailable: true,
+        models: [
+          {
+            id: "openai/gpt-4.1-mini",
+            label: "OpenAI GPT-4.1 Mini"
+          }
+        ]
+      }),
+      bootstrap: vi.fn().mockResolvedValue({
+        auth: {
+          accountLabel: null,
+          authenticated: false,
+          provider: "github-models"
+        },
+        devCliAvailable: true,
+        models: []
+      }),
+      completeChat: vi.fn(),
+      logout: vi.fn(),
+      pollDeviceAuth: vi.fn(() => new Promise<AppDeviceAuthPollResponse>(() => undefined)),
+      startDeviceAuth: vi.fn().mockResolvedValue({
+        deviceCode: "device-4",
+        expiresAt: "2026-03-13T18:15:00.000Z",
+        intervalSeconds: 60,
+        userCode: "PQRS-1111",
+        verificationUri: "https://github.com/login/device"
+      })
+    };
+
+    renderApp(client);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
+    expect(await screen.findByText("PQRS-1111")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Use local GitHub CLI" }));
+    expect(await screen.findByRole("heading", { name: "Dhruv2mars" })).toBeInTheDocument();
+    expect(screen.queryByText("PQRS-1111")).toBeNull();
+    expect(screen.queryByText("Waiting for GitHub approval")).toBeNull();
+    expect(screen.getAllByText("GitHub CLI session loaded")).not.toHaveLength(0);
+  });
 });

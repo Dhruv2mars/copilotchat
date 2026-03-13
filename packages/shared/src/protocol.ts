@@ -61,6 +61,25 @@ export interface AuthDevicePollResponse extends AuthSessionResponse {
   status: "complete" | "pending";
 }
 
+export interface AppBootstrapResponse {
+  auth: AuthSessionResponse;
+  devCliAvailable: boolean;
+  models: ListedModel[];
+}
+
+export interface AppDeviceAuthPollPendingResponse {
+  pollAfterSeconds?: number;
+  status: "pending";
+}
+
+export interface AppDeviceAuthPollCompleteResponse extends AppBootstrapResponse {
+  status: "complete";
+}
+
+export type AppDeviceAuthPollResponse =
+  | AppDeviceAuthPollPendingResponse
+  | AppDeviceAuthPollCompleteResponse;
+
 export interface ListedModel {
   id: string;
   label: string;
@@ -100,3 +119,11 @@ export type BridgeStreamEvent =
   | AssistantDeltaEvent
   | AssistantDoneEvent
   | AssistantErrorEvent;
+
+export interface ChatCompletionResponse {
+  message: ChatMessage;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+  };
+}

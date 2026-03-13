@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
 import { createAppStore } from "./app-store";
-import { createHttpBridgeClient } from "./bridge-client";
+import { createHttpBffClient } from "./bff-client";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -16,8 +16,8 @@ const queryClient = new QueryClient({
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
     <App
-      client={createHttpBridgeClient({
-        baseUrl: import.meta.env.VITE_BRIDGE_URL ?? "http://127.0.0.1:8787"
+      client={createHttpBffClient({
+        baseUrl: import.meta.env.VITE_API_BASE_URL ?? "/api"
       })}
       store={createAppStore()}
     />
