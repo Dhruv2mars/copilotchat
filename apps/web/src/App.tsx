@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AppBootstrapResponse, AuthDeviceStartResponse, ChatMessage } from "@copilotchat/shared";
+import type { ChatMessage } from "@copilotchat/shared";
 import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useStore } from "zustand";
@@ -42,8 +42,8 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
 
   const [selectedModel, setSelectedModel] = useState("");
   const [statusNote, setStatusNote] = useState("");
-  const [deviceChallenge, setDeviceChallenge] = useState<AuthDeviceStartResponse | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [personalAccessToken, setPersonalAccessToken] = useState("");
 
   useEffect(() => {
     if (!selectedModel && models[0]?.id) {
@@ -61,56 +61,6 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
     });
   }, [activeSessionId, isReady, store]);
 
-  useEffect(() => {
-    if (!deviceChallenge) {
-      return;
-    }
-
-    let cancelled = false;
-    let timerId: number | null = null;
-
-    const pollOnce = async () => {
-      try {
-        const response = await client.pollDeviceAuth({
-          deviceCode: deviceChallenge.deviceCode
-        });
-
-        if (cancelled) {
-          return;
-        }
-
-        if (response.status === "pending") {
-          setStatusNote("Waiting for GitHub approval");
-          timerId = window.setTimeout(
-            () => void pollOnce(),
-            (response.pollAfterSeconds ?? deviceChallenge.intervalSeconds) * 1000
-          );
-          return;
-        }
-
-        queryClient.setQueryData(["bootstrap"], {
-          auth: response.auth,
-          devCliAvailable: response.devCliAvailable,
-          models: response.models
-        } satisfies AppBootstrapResponse);
-        setDeviceChallenge(null);
-        setStatusNote("GitHub connected");
-      } catch (errorValue) {
-        setDeviceChallenge(null);
-        setStatusNote(readErrorMessage(errorValue));
-      }
-    };
-
-    void pollOnce();
-
-    return () => {
-      cancelled = true;
-      if (timerId !== null) {
-        window.clearTimeout(timerId);
-      }
-    };
-  }, [client, deviceChallenge, queryClient]);
-
   const runtime: RuntimeState = bootstrapQuery.isPending ? "loading" : isReady ? "ready" : "signed_out";
 
   const filteredSessions = useMemo(
@@ -121,22 +71,24 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
     [deferredSearch, sessions]
   );
 
-  async function startDeviceAuth() {
+  async function authWithCli() {
     try {
-      const challenge = await client.startDeviceAuth();
-      setDeviceChallenge(challenge);
-      setStatusNote("Approve GitHub, then come back here");
+      const next = await client.authWithCli();
+      queryClient.setQueryData(["bootstrap"], next);
+      setStatusNote("GitHub CLI session loaded");
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
     }
   }
 
-  async function authWithCli() {
+  async function authWithPat() {
     try {
-      const next = await client.authWithCli();
+      const next = await client.authWithPat({
+        token: personalAccessToken
+      });
       queryClient.setQueryData(["bootstrap"], next);
-      setDeviceChallenge(null);
-      setStatusNote("GitHub CLI session loaded");
+      setPersonalAccessToken("");
+      setStatusNote("PAT connected");
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
     }
@@ -177,7 +129,6 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
     try {
       const next = await client.logout();
       queryClient.setQueryData(["bootstrap"], next);
-      setDeviceChallenge(null);
       setStatusNote("Signed out");
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
@@ -207,12 +158,14 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
               <ChatRoute
                 accountLabel={accountLabel}
                 activeSession={activeSession}
-                deviceChallenge={deviceChallenge}
                 devCliAvailable={bootstrap?.devCliAvailable ?? false}
                 isSending={isSending}
                 models={models}
+                personalAccessToken={personalAccessToken}
+                setPersonalAccessToken={setPersonalAccessToken}
                 runtime={runtime}
                 selectedModel={selectedModel}
+                startPatAuth={authWithPat}
                 sendMessage={sendMessage}
                 setDraft={(value) => {
                   if (activeSession) {
@@ -220,19 +173,13 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
                   }
                 }}
                 setSelectedModel={setSelectedModel}
-                startDeviceAuth={startDeviceAuth}
                 startLocalCliAuth={authWithCli}
                 statusNote={statusNote}
               />
             }
             path="/chat"
           />
-          <Route
-            element={
-              <AccessRoute devCliAvailable={bootstrap?.devCliAvailable ?? false} deviceChallenge={deviceChallenge} />
-            }
-            path="/access"
-          />
+          <Route element={<AccessRoute devCliAvailable={bootstrap?.devCliAvailable ?? false} />} path="/access" />
           <Route
             element={
               <DiagnosticsRoute
@@ -278,7 +225,7 @@ function CommandRail(props: {
         <p className="eyebrow">Copilot Chat</p>
         <h1>Hosted BFF, no local bridge.</h1>
         <p className="lead-copy">
-          GitHub auth and GitHub Models run through a thin serverless backend instead of localhost.
+          GitHub auth and GitHub Models run through a thin serverless backend; picker stays pinned to current Copilot GA models.
         </p>
       </div>
 
@@ -358,6 +305,7 @@ function RuntimeAside(props: { modelCount: number; runtime: RuntimeState }) {
         <ul className="policy-list">
           <li>GitHub token stays in an http-only session cookie, not JS storage.</li>
           <li>Models traffic goes through the hosted BFF because GitHub Models is not browser-CORS friendly.</li>
+          <li>Only Copilot GA models that also resolve in the GitHub Models API stay in the picker.</li>
           <li>No local daemon, pairing dance, or machine-specific runtime needed.</li>
         </ul>
       </section>
@@ -390,16 +338,17 @@ function ChatRoute(props: {
     id: string;
     messages: ChatMessage[];
   } | null;
-  deviceChallenge: AuthDeviceStartResponse | null;
   devCliAvailable: boolean;
   isSending: boolean;
   models: { id: string; label: string }[];
+  personalAccessToken: string;
   runtime: RuntimeState;
   selectedModel: string;
   sendMessage(): Promise<void>;
   setDraft(value: string): void;
+  setPersonalAccessToken(value: string): void;
   setSelectedModel(value: string): void;
-  startDeviceAuth(): Promise<void>;
+  startPatAuth(): Promise<void>;
   startLocalCliAuth(): Promise<void>;
   statusNote: string;
 }) {
@@ -422,13 +371,24 @@ function ChatRoute(props: {
       <section className="stage stage-hero">
         <div className="hero-grid">
           <div className="hero-copy">
-            <p className="eyebrow">GitHub auth</p>
-            <h2>Connect with GitHub</h2>
-            <p>Authorize once, then send non-streaming prompts through the hosted BFF.</p>
+            <p className="eyebrow">GitHub Models auth</p>
+            <h2>Connect a PAT with Models access</h2>
+            <p>Use a GitHub personal access token with GitHub Models permission. Device-flow tokens do not reliably work here.</p>
             {props.statusNote ? <p className="hero-note">{props.statusNote}</p> : null}
+            <label className="search-box">
+              <span>Personal access token</span>
+              <input
+                aria-label="Personal access token"
+                autoComplete="off"
+                onChange={(event) => props.setPersonalAccessToken(event.target.value)}
+                placeholder="github_pat_..."
+                type="password"
+                value={props.personalAccessToken}
+              />
+            </label>
             <div className="composer-row">
-              <button className="primary-button" onClick={() => void props.startDeviceAuth()} type="button">
-                Connect with GitHub
+              <button className="primary-button" onClick={() => void props.startPatAuth()} type="button">
+                Connect PAT
               </button>
               {props.devCliAvailable ? (
                 <button className="ghost-button" onClick={() => void props.startLocalCliAuth()} type="button">
@@ -439,22 +399,11 @@ function ChatRoute(props: {
           </div>
 
           <div className="hero-side">
-            {props.deviceChallenge ? (
-              <div className="challenge-card">
-                <p className="eyebrow">Device code</p>
-                <h3>{props.deviceChallenge.userCode}</h3>
-                <p>Expires {new Date(props.deviceChallenge.expiresAt).toLocaleTimeString()}</p>
-                <a href={props.deviceChallenge.verificationUri} rel="noreferrer" target="_blank">
-                  Open GitHub verification
-                </a>
-              </div>
-            ) : (
-              <div className="challenge-card challenge-card-idle">
-                <p className="eyebrow">Auth path</p>
-                <h3>Hosted session cookie</h3>
-                <p>Login lands in the BFF, not the browser, so chat can stay simple.</p>
-              </div>
-            )}
+            <div className="challenge-card challenge-card-idle">
+              <p className="eyebrow">Required token</p>
+              <h3>GitHub PAT with Models access</h3>
+              <p>The BFF stores it in an encrypted http-only session cookie after validation.</p>
+            </div>
           </div>
         </div>
       </section>
@@ -531,19 +480,19 @@ function ChatRoute(props: {
   );
 }
 
-function AccessRoute(props: { devCliAvailable: boolean; deviceChallenge: AuthDeviceStartResponse | null }) {
+function AccessRoute(props: { devCliAvailable: boolean }) {
   return (
     <section className="stage stage-hero">
       <div className="hero-grid">
         <div className="hero-copy">
           <p className="eyebrow">Hosted access</p>
-          <h2>No bridge install required</h2>
+          <h2>PAT in, cookie out</h2>
           <p>The app uses a hosted BFF for GitHub auth and model calls, so the browser never hits `models.github.ai` directly.</p>
         </div>
         <div className="platform-grid">
           <article>
             <span>Primary</span>
-            <p>GitHub device flow via serverless auth endpoints.</p>
+            <p>GitHub PAT with Models access, validated server-side.</p>
           </article>
           <article>
             <span>Cookie</span>
@@ -554,8 +503,8 @@ function AccessRoute(props: { devCliAvailable: boolean; deviceChallenge: AuthDev
             <p>{props.devCliAvailable ? "Local GitHub CLI auth is enabled." : "Local GitHub CLI auth is disabled."}</p>
           </article>
           <article>
-            <span>Approval</span>
-            <p>{props.deviceChallenge ? "Device code active and waiting for approval." : "No device flow request active."}</p>
+            <span>Legacy</span>
+            <p>Device flow hidden because it does not reliably grant Models API access.</p>
           </article>
         </div>
       </div>
@@ -609,7 +558,7 @@ function formatRuntimeLabel(runtime: RuntimeState) {
 
 function runtimeSummary(runtime: RuntimeState) {
   if (runtime === "loading") return "Checking hosted session.";
-  if (runtime === "signed_out") return "GitHub sign-in required.";
+  if (runtime === "signed_out") return "GitHub PAT required.";
   return "Inference path armed.";
 }
 

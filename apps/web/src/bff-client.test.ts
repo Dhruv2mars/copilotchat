@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createHttpBffClient } from "./bff-client";
 
 describe("bff-client", () => {
-  it("boots, starts device auth, polls, chats, logs out, and supports local cli auth", async () => {
+  it("boots, authenticates with pat, starts device auth, polls, chats, logs out, and supports local cli auth", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -16,6 +16,25 @@ describe("bff-client", () => {
             },
             devCliAvailable: true,
             models: []
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            auth: {
+              accountLabel: "Dhruv2mars",
+              authenticated: true,
+              provider: "github-models",
+              tokenHint: "ghp_...7890"
+            },
+            devCliAvailable: true,
+            models: [
+              {
+                id: "openai/gpt-5-mini",
+                label: "OpenAI GPT-5 mini"
+              }
+            ]
           })
         )
       )
@@ -116,6 +135,18 @@ describe("bff-client", () => {
       devCliAvailable: true
     });
 
+    await expect(client.authWithPat({ token: "ghp_token_12345678" })).resolves.toMatchObject({
+      auth: {
+        authenticated: true
+      },
+      models: [
+        {
+          id: "openai/gpt-5-mini",
+          label: "OpenAI GPT-5 mini"
+        }
+      ]
+    });
+
     await expect(client.startDeviceAuth()).resolves.toMatchObject({
       deviceCode: "device-1",
       userCode: "ABCD-EFGH"
@@ -176,6 +207,16 @@ describe("bff-client", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/bootstrap", undefined);
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
+      "/api/auth/pat",
+      expect.objectContaining({
+        body: JSON.stringify({
+          token: "ghp_token_12345678"
+        }),
+        method: "POST"
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
       "/api/auth/device/start",
       expect.objectContaining({
         method: "POST"

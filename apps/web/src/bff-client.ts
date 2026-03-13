@@ -3,12 +3,14 @@ import type {
   AppDeviceAuthPollResponse,
   AuthDeviceStartResponse,
   ChatCompletionResponse,
-  ChatStreamRequest
+  ChatStreamRequest,
+  PatAuthRequest
 } from "@copilotchat/shared";
 
 type AppFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface BffClient {
+  authWithPat(input: PatAuthRequest): Promise<AppBootstrapResponse>;
   authWithCli(): Promise<AppBootstrapResponse>;
   bootstrap(): Promise<AppBootstrapResponse>;
   completeChat(request: ChatStreamRequest): Promise<ChatCompletionResponse>;
@@ -24,6 +26,15 @@ export function createHttpBffClient(options: {
   const fetchFn = options.fetchFn ?? fetch;
 
   return {
+    authWithPat(input) {
+      return requestJson(fetchFn, `${options.baseUrl}/auth/pat`, {
+        body: JSON.stringify(input),
+        headers: {
+          "content-type": "application/json"
+        },
+        method: "POST"
+      });
+    },
     authWithCli() {
       return requestJson(fetchFn, `${options.baseUrl}/auth/dev/cli`, {
         method: "POST"
