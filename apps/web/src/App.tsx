@@ -1,18 +1,18 @@
-import { useQuery } from "@tanstack/react-query";
-import type { AuthDeviceStartResponse, ChatMessage } from "@copilotchat/shared";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { AppBootstrapResponse, AuthDeviceStartResponse, ChatMessage } from "@copilotchat/shared";
 import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useStore } from "zustand";
 
-import type { AppSession, AppStore } from "./app-store";
+import type { AppStore } from "./app-store";
 import { createSessionId } from "./app-store";
-import type { BridgeClient } from "./bridge-client";
+import type { BffClient } from "./bff-client";
 
 import "./styles.css";
 
-type RuntimeState = "offline" | "ready" | "unauthenticated" | "unpaired";
+type RuntimeState = "loading" | "ready" | "signed_out";
 
-export function App(props: { client: BridgeClient; store: AppStore }) {
+export function App(props: { client: BffClient; store: AppStore }) {
   return (
     <BrowserRouter>
       <Shell {...props} />
@@ -20,44 +20,36 @@ export function App(props: { client: BridgeClient; store: AppStore }) {
   );
 }
 
-function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
-  const pairingToken = useStore(store, (state) => state.pairingToken);
+function Shell({ client, store }: { client: BffClient; store: AppStore }) {
+  const queryClient = useQueryClient();
   const sessions = useStore(store, (state) => state.sessions);
   const activeSessionId = useStore(store, (state) => state.activeSessionId);
   const sessionSearch = useStore(store, (state) => state.sessionSearch);
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
 
-  const healthQuery = useQuery({
-    queryFn: () => client.health(),
-    queryKey: ["bridge-health"],
+  const bootstrapQuery = useQuery({
+    queryFn: () => client.bootstrap(),
+    queryKey: ["bootstrap"],
     retry: false,
-    staleTime: 5_000
-  });
-  const refetchHealth = healthQuery.refetch;
-
-  const isReady = Boolean(pairingToken && healthQuery.data?.auth.authenticated);
-  const modelsQuery = useQuery({
-    enabled: isReady,
-    queryFn: () =>
-      client.listModels({
-        origin: window.location.origin,
-        token: pairingToken as string
-      }),
-    queryKey: ["bridge-models", pairingToken]
+    staleTime: 15_000
   });
 
-  const [selectedModel, setSelectedModel] = useState("");
-  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
-  const [statusNote, setStatusNote] = useState("");
-  const [authChallenge, setAuthChallenge] = useState<AuthDeviceStartResponse | null>(null);
-  const [organizationDraft, setOrganizationDraft] = useState("");
+  const bootstrap = bootstrapQuery.data ?? null;
+  const isReady = Boolean(bootstrap?.auth.authenticated);
+  const models = bootstrap?.models ?? [];
+  const accountLabel = bootstrap?.auth.accountLabel ?? "GitHub Models";
   const deferredSearch = useDeferredValue(sessionSearch);
 
+  const [selectedModel, setSelectedModel] = useState("");
+  const [statusNote, setStatusNote] = useState("");
+  const [deviceChallenge, setDeviceChallenge] = useState<AuthDeviceStartResponse | null>(null);
+  const [isSending, setIsSending] = useState(false);
+
   useEffect(() => {
-    if (!selectedModel && modelsQuery.data?.[0]?.id) {
-      setSelectedModel(modelsQuery.data[0].id);
+    if (!selectedModel && models[0]?.id) {
+      setSelectedModel(models[0].id);
     }
-  }, [modelsQuery.data, selectedModel]);
+  }, [models, selectedModel]);
 
   useEffect(() => {
     if (!isReady || activeSessionId) {
@@ -70,7 +62,7 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
   }, [activeSessionId, isReady, store]);
 
   useEffect(() => {
-    if (!authChallenge || !pairingToken) {
+    if (!deviceChallenge) {
       return;
     }
 
@@ -80,26 +72,31 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
     const pollOnce = async () => {
       try {
         const response = await client.pollDeviceAuth({
-          deviceCode: authChallenge.deviceCode,
-          origin: window.location.origin,
-          token: pairingToken
+          deviceCode: deviceChallenge.deviceCode
         });
 
-        /* v8 ignore next */
-        if (cancelled) return;
-
-        if (response.status === "pending") {
-          setStatusNote("Waiting for GitHub approval");
-          /* v8 ignore next */
-          timerId = window.setTimeout(() => void pollOnce(), (response.pollAfterSeconds ?? authChallenge.intervalSeconds) * 1000);
+        if (cancelled) {
           return;
         }
 
-        setAuthChallenge(null);
+        if (response.status === "pending") {
+          setStatusNote("Waiting for GitHub approval");
+          timerId = window.setTimeout(
+            () => void pollOnce(),
+            (response.pollAfterSeconds ?? deviceChallenge.intervalSeconds) * 1000
+          );
+          return;
+        }
+
+        queryClient.setQueryData(["bootstrap"], {
+          auth: response.auth,
+          devCliAvailable: response.devCliAvailable,
+          models: response.models
+        } satisfies AppBootstrapResponse);
+        setDeviceChallenge(null);
         setStatusNote("GitHub connected");
-        await refetchHealth();
       } catch (errorValue) {
-        setAuthChallenge(null);
+        setDeviceChallenge(null);
         setStatusNote(readErrorMessage(errorValue));
       }
     };
@@ -112,15 +109,9 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
         window.clearTimeout(timerId);
       }
     };
-  }, [authChallenge, client, pairingToken, refetchHealth]);
+  }, [client, deviceChallenge, queryClient]);
 
-  const runtime: RuntimeState = healthQuery.isError
-    ? "offline"
-    : !pairingToken
-      ? "unpaired"
-      : healthQuery.data?.auth.authenticated
-        ? "ready"
-        : "unauthenticated";
+  const runtime: RuntimeState = bootstrapQuery.isPending ? "loading" : isReady ? "ready" : "signed_out";
 
   const filteredSessions = useMemo(
     () =>
@@ -130,41 +121,29 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
     [deferredSearch, sessions]
   );
 
-  async function pairBridge() {
+  async function startDeviceAuth() {
     try {
-      const challenge = await client.startPairing({
-        origin: window.location.origin
-      });
-      const session = await client.confirmPairing({
-        code: challenge.code,
-        origin: window.location.origin,
-        pairingId: challenge.pairingId
-      });
-      store.getState().setPairingToken(session.token);
-      setStatusNote("Bridge paired");
-      await refetchHealth();
+      const challenge = await client.startDeviceAuth();
+      setDeviceChallenge(challenge);
+      setStatusNote("Approve GitHub, then come back here");
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
     }
   }
 
-  async function startGitHubAuth() {
+  async function authWithCli() {
     try {
-      const challenge = await client.startDeviceAuth({
-        openInBrowser: true,
-        organization: organizationDraft.trim() || undefined,
-        origin: window.location.origin,
-        token: pairingToken as string
-      });
-      setAuthChallenge(challenge);
-      setStatusNote("Approve GitHub in the browser");
+      const next = await client.authWithCli();
+      queryClient.setQueryData(["bootstrap"], next);
+      setDeviceChallenge(null);
+      setStatusNote("GitHub CLI session loaded");
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
     }
   }
 
   async function sendMessage() {
-    if (!activeSession || !pairingToken || !selectedModel || !activeSession.draft.trim()) {
+    if (!activeSession || !selectedModel || !activeSession.draft.trim() || isSending) {
       return;
     }
 
@@ -173,81 +152,33 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
       id: createSessionId(),
       role: "user"
     };
-    const assistantMessageId = createSessionId();
-    const requestId = createSessionId();
 
     store.getState().appendMessage(activeSession.id, userMessage);
     store.getState().setDraft(activeSession.id, "");
-    store.getState().appendMessage(activeSession.id, {
-      content: "…",
-      id: assistantMessageId,
-      role: "assistant"
-    });
-
-    setPendingRequestId(requestId);
-    setStatusNote("Streaming from local bridge");
-
-    let assistantText = "";
+    setIsSending(true);
+    setStatusNote("Waiting for GitHub Models");
 
     try {
-      await client.streamChat(
-        {
-          origin: window.location.origin,
-          request: {
-            messages: [...activeSession.messages, userMessage],
-            modelId: selectedModel,
-            requestId
-          },
-          token: pairingToken
-        },
-        (event) => {
-          if (event.type === "assistant_delta") {
-            assistantText += event.data;
-            startTransition(() => {
-              store.getState().upsertMessage(activeSession.id, {
-                content: assistantText,
-                id: assistantMessageId,
-                role: "assistant"
-              });
-            });
-            return;
-          }
-
-          if (event.type === "assistant_done") {
-            setStatusNote(`${event.usage.outputTokens} output tokens`);
-            return;
-          }
-
-          setStatusNote(event.message);
-        }
-      );
+      const response = await client.completeChat({
+        messages: [...activeSession.messages, userMessage],
+        modelId: selectedModel,
+        requestId: createSessionId()
+      });
+      store.getState().appendMessage(activeSession.id, response.message);
+      setStatusNote(`${response.usage.outputTokens} output tokens`);
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
     } finally {
-      setPendingRequestId(null);
-    }
-  }
-
-  async function stopStreaming(requestId: string, token: string) {
-    try {
-      await client.abortChat({
-        origin: window.location.origin,
-        requestId,
-        token
-      });
-      setPendingRequestId(null);
-      setStatusNote("Generation stopped");
-    } catch (errorValue) {
-      setStatusNote(readErrorMessage(errorValue));
+      setIsSending(false);
     }
   }
 
   async function logout() {
     try {
-      await client.logout();
-      setAuthChallenge(null);
-      setStatusNote("Local bridge logged out");
-      await refetchHealth();
+      const next = await client.logout();
+      queryClient.setQueryData(["bootstrap"], next);
+      setDeviceChallenge(null);
+      setStatusNote("Signed out");
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
     }
@@ -256,9 +187,9 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
   return (
     <div className="app-shell">
       <CommandRail
+        accountLabel={accountLabel}
         activeSessionId={activeSessionId}
         activeSessionTitle={activeSession?.title ?? "No thread selected"}
-        accountLabel={healthQuery.data?.auth.accountLabel ?? "Bridge-first runtime"}
         filteredSessions={filteredSessions}
         logout={logout}
         runtime={runtime}
@@ -274,13 +205,12 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
           <Route
             element={
               <ChatRoute
+                accountLabel={accountLabel}
                 activeSession={activeSession}
-                accountLabel={healthQuery.data?.auth.accountLabel ?? "GitHub Models"}
-                authChallenge={authChallenge}
-                models={modelsQuery.data ?? []}
-                organizationDraft={organizationDraft}
-                pairBridge={pairBridge}
-                pendingRequestId={pendingRequestId}
+                deviceChallenge={deviceChallenge}
+                devCliAvailable={bootstrap?.devCliAvailable ?? false}
+                isSending={isSending}
+                models={models}
                 runtime={runtime}
                 selectedModel={selectedModel}
                 sendMessage={sendMessage}
@@ -289,26 +219,27 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
                     store.getState().setDraft(activeSession.id, value);
                   }
                 }}
-                setOrganizationDraft={setOrganizationDraft}
                 setSelectedModel={setSelectedModel}
-                startGitHubAuth={startGitHubAuth}
+                startDeviceAuth={startDeviceAuth}
+                startLocalCliAuth={authWithCli}
                 statusNote={statusNote}
-                stopStreaming={
-                  pendingRequestId && pairingToken
-                    ? () => stopStreaming(pendingRequestId, pairingToken)
-                    : null
-                }
               />
             }
             path="/chat"
           />
-          <Route element={<InstallRoute />} path="/install" />
+          <Route
+            element={
+              <AccessRoute devCliAvailable={bootstrap?.devCliAvailable ?? false} deviceChallenge={deviceChallenge} />
+            }
+            path="/access"
+          />
           <Route
             element={
               <DiagnosticsRoute
-                pairingToken={pairingToken}
+                accountLabel={accountLabel}
+                devCliAvailable={bootstrap?.devCliAvailable ?? false}
+                models={models}
                 runtime={runtime}
-                version={healthQuery.data?.bridgeVersion ?? "offline"}
               />
             }
             path="/diagnostics"
@@ -317,20 +248,20 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
         </Routes>
       </main>
 
-      <RuntimeAside
-        bridgeVersion={healthQuery.data?.bridgeVersion ?? "offline"}
-        modelCount={modelsQuery.data?.length ?? 0}
-        runtime={runtime}
-      />
+      <RuntimeAside modelCount={models.length} runtime={runtime} />
     </div>
   );
 }
 
 function CommandRail(props: {
+  accountLabel: string;
   activeSessionId: string | null;
   activeSessionTitle: string;
-  accountLabel: string;
-  filteredSessions: AppSession[];
+  filteredSessions: Array<{
+    id: string;
+    messages: ChatMessage[];
+    title: string;
+  }>;
   logout(): Promise<void>;
   runtime: RuntimeState;
   sessionSearch: string;
@@ -345,9 +276,9 @@ function CommandRail(props: {
     <aside className="command-rail">
       <div className="brand-block">
         <p className="eyebrow">Copilot Chat</p>
-        <h1>Bridge control, not browser theater.</h1>
+        <h1>Hosted BFF, no local bridge.</h1>
         <p className="lead-copy">
-          Hosted shell on Vercel. Auth and inference stay local, visible, and recoverable.
+          GitHub auth and GitHub Models run through a thin serverless backend instead of localhost.
         </p>
       </div>
 
@@ -355,8 +286,8 @@ function CommandRail(props: {
         <Link className={location.pathname === "/chat" ? "nav-link active" : "nav-link"} to="/chat">
           Chat
         </Link>
-        <Link className={location.pathname === "/install" ? "nav-link active" : "nav-link"} to="/install">
-          Install
+        <Link className={location.pathname === "/access" ? "nav-link active" : "nav-link"} to="/access">
+          Access
         </Link>
         <Link
           className={location.pathname === "/diagnostics" ? "nav-link active" : "nav-link"}
@@ -418,16 +349,16 @@ function CommandRail(props: {
   );
 }
 
-function RuntimeAside(props: { bridgeVersion: string; modelCount: number; runtime: RuntimeState }) {
+function RuntimeAside(props: { modelCount: number; runtime: RuntimeState }) {
   return (
     <aside className="runtime-aside">
       <section className="rail-card policy-card">
         <p className="eyebrow">Runtime policy</p>
         <h2>Production guardrails</h2>
         <ul className="policy-list">
-          <li>Bridge keeps secrets in keychain, not browser.</li>
-          <li>Pairing gates localhost APIs before chat unlocks.</li>
-          <li>Hosted UI stays stateless about Copilot auth.</li>
+          <li>GitHub token stays in an http-only session cookie, not JS storage.</li>
+          <li>Models traffic goes through the hosted BFF because GitHub Models is not browser-CORS friendly.</li>
+          <li>No local daemon, pairing dance, or machine-specific runtime needed.</li>
         </ul>
       </section>
 
@@ -439,8 +370,8 @@ function RuntimeAside(props: { bridgeVersion: string; modelCount: number; runtim
             <strong>{formatRuntimeLabel(props.runtime)}</strong>
           </article>
           <article>
-            <span>Bridge</span>
-            <strong>{props.bridgeVersion}</strong>
+            <span>Backend</span>
+            <strong>Vercel BFF</strong>
           </article>
           <article>
             <span>Models</span>
@@ -452,104 +383,76 @@ function RuntimeAside(props: { bridgeVersion: string; modelCount: number; runtim
   );
 }
 
-export function ChatRoute(props: {
+function ChatRoute(props: {
+  accountLabel: string;
   activeSession: {
     draft: string;
     id: string;
     messages: ChatMessage[];
   } | null;
-  accountLabel: string;
-  authChallenge: AuthDeviceStartResponse | null;
+  deviceChallenge: AuthDeviceStartResponse | null;
+  devCliAvailable: boolean;
+  isSending: boolean;
   models: { id: string; label: string }[];
-  organizationDraft: string;
-  pairBridge(): Promise<void>;
-  pendingRequestId: string | null;
   runtime: RuntimeState;
   selectedModel: string;
   sendMessage(): Promise<void>;
-  startGitHubAuth(): Promise<void>;
   setDraft(value: string): void;
-  setOrganizationDraft(value: string): void;
   setSelectedModel(value: string): void;
+  startDeviceAuth(): Promise<void>;
+  startLocalCliAuth(): Promise<void>;
   statusNote: string;
-  stopStreaming: (() => Promise<void>) | null;
 }) {
-  if (props.runtime === "offline") {
-    return <InstallRoute />;
-  }
-
-  if (props.runtime === "unpaired") {
+  if (props.runtime === "loading") {
     return (
       <section className="stage stage-hero">
         <div className="hero-grid">
           <div className="hero-copy">
-            <p className="eyebrow">Bridge handshake</p>
-            <h2>Pair your local bridge</h2>
-            <p>
-              Chat stays locked until the browser proves it is talking to your localhost runtime, not a hosted fake.
-            </p>
-            {props.statusNote ? <p className="hero-note">{props.statusNote}</p> : null}
-            <button className="primary-button" onClick={() => void props.pairBridge()} type="button">
-              Pair bridge
-            </button>
-          </div>
-          <div className="hero-side">
-            <div className="signal-card">
-              <span>01</span>
-              <p>Detect bridge on localhost.</p>
-            </div>
-            <div className="signal-card">
-              <span>02</span>
-              <p>Exchange short-lived pairing proof.</p>
-            </div>
-            <div className="signal-card">
-              <span>03</span>
-              <p>Unlock auth and model calls.</p>
-            </div>
+            <p className="eyebrow">Session bootstrap</p>
+            <h2>Loading session</h2>
+            <p>Checking your hosted GitHub session and loading the model catalog.</p>
           </div>
         </div>
       </section>
     );
   }
 
-  if (props.runtime === "unauthenticated") {
+  if (props.runtime === "signed_out") {
     return (
       <section className="stage stage-hero">
         <div className="hero-grid">
           <div className="hero-copy">
             <p className="eyebrow">GitHub auth</p>
             <h2>Connect with GitHub</h2>
-            <p>Authorize once. Token lands in the bridge keychain. Browser only sees runtime status.</p>
+            <p>Authorize once, then send non-streaming prompts through the hosted BFF.</p>
             {props.statusNote ? <p className="hero-note">{props.statusNote}</p> : null}
-            <label className="search-box hero-input">
-              <span>Organization slug optional</span>
-              <input
-                aria-label="Organization slug optional"
-                onChange={(event) => props.setOrganizationDraft(event.target.value)}
-                placeholder="acme-inc"
-                value={props.organizationDraft}
-              />
-            </label>
-            <button className="primary-button" onClick={() => void props.startGitHubAuth()} type="button">
-              Connect with GitHub
-            </button>
+            <div className="composer-row">
+              <button className="primary-button" onClick={() => void props.startDeviceAuth()} type="button">
+                Connect with GitHub
+              </button>
+              {props.devCliAvailable ? (
+                <button className="ghost-button" onClick={() => void props.startLocalCliAuth()} type="button">
+                  Use local GitHub CLI
+                </button>
+              ) : null}
+            </div>
           </div>
 
           <div className="hero-side">
-            {props.authChallenge ? (
+            {props.deviceChallenge ? (
               <div className="challenge-card">
                 <p className="eyebrow">Device code</p>
-                <h3>{props.authChallenge.userCode}</h3>
-                <p>Expires {new Date(props.authChallenge.expiresAt).toLocaleTimeString()}</p>
-                <a href={props.authChallenge.verificationUri} rel="noreferrer" target="_blank">
+                <h3>{props.deviceChallenge.userCode}</h3>
+                <p>Expires {new Date(props.deviceChallenge.expiresAt).toLocaleTimeString()}</p>
+                <a href={props.deviceChallenge.verificationUri} rel="noreferrer" target="_blank">
                   Open GitHub verification
                 </a>
               </div>
             ) : (
               <div className="challenge-card challenge-card-idle">
                 <p className="eyebrow">Auth path</p>
-                <h3>Browser redirect via bridge</h3>
-                <p>Device flow opens GitHub, bridge polls, UI refreshes when ready.</p>
+                <h3>Hosted session cookie</h3>
+                <p>Login lands in the BFF, not the browser, so chat can stay simple.</p>
               </div>
             )}
           </div>
@@ -558,7 +461,7 @@ export function ChatRoute(props: {
     );
   }
 
-  const messages = props.activeSession === null ? [] : props.activeSession.messages;
+  const messages = props.activeSession?.messages ?? [];
   const threadContent =
     messages.length > 0 ? (
       messages.map((message) => (
@@ -570,8 +473,8 @@ export function ChatRoute(props: {
     ) : (
       <div className="thread-empty">
         <p className="eyebrow">Ready</p>
-        <h3>Ask through your local Copilot bridge</h3>
-        <p>Streaming lands here. Abort, retry, and recovery stay visible instead of hidden behind hosted magic.</p>
+        <h3>Ask GitHub Models</h3>
+        <p>Each send is one non-streaming serverless round-trip through the hosted BFF.</p>
       </div>
     );
 
@@ -614,18 +517,13 @@ export function ChatRoute(props: {
         <textarea
           id="chat-input"
           onChange={(event) => props.setDraft(event.target.value)}
-          placeholder="Ask through your local Copilot bridge"
+          placeholder="Send a non-streaming GitHub Models prompt"
           value={props.activeSession?.draft ?? ""}
         />
         <div className="composer-row">
-          <p>{props.statusNote || "Local stream path armed."}</p>
-          {props.pendingRequestId && props.stopStreaming ? (
-            <button className="ghost-button" onClick={() => void props.stopStreaming?.()} type="button">
-              Stop
-            </button>
-          ) : null}
-          <button className="primary-button" onClick={() => void props.sendMessage()} type="button">
-            Send
+          <p>{props.statusNote || "One function invocation per prompt."}</p>
+          <button className="primary-button" disabled={props.isSending} onClick={() => void props.sendMessage()} type="button">
+            {props.isSending ? "Sending..." : "Send"}
           </button>
         </div>
       </footer>
@@ -633,27 +531,31 @@ export function ChatRoute(props: {
   );
 }
 
-function InstallRoute() {
+function AccessRoute(props: { devCliAvailable: boolean; deviceChallenge: AuthDeviceStartResponse | null }) {
   return (
     <section className="stage stage-hero">
       <div className="hero-grid">
         <div className="hero-copy">
-          <p className="eyebrow">Bridge install</p>
-          <h2>Install the bridge</h2>
-          <p>The Vercel app is public. Auth, models, and chat still require the local runtime on this machine.</p>
+          <p className="eyebrow">Hosted access</p>
+          <h2>No bridge install required</h2>
+          <p>The app uses a hosted BFF for GitHub auth and model calls, so the browser never hits `models.github.ai` directly.</p>
         </div>
         <div className="platform-grid">
           <article>
-            <span>macOS</span>
-            <p>Signed `.dmg` helper with login auto-start.</p>
+            <span>Primary</span>
+            <p>GitHub device flow via serverless auth endpoints.</p>
           </article>
           <article>
-            <span>Windows</span>
-            <p>Signed installer with update channel manifest.</p>
+            <span>Cookie</span>
+            <p>Encrypted, http-only session cookie for GitHub access token.</p>
           </article>
           <article>
-            <span>Linux</span>
-            <p>Portable artifact plus checksum metadata.</p>
+            <span>Dev</span>
+            <p>{props.devCliAvailable ? "Local GitHub CLI auth is enabled." : "Local GitHub CLI auth is disabled."}</p>
+          </article>
+          <article>
+            <span>Approval</span>
+            <p>{props.deviceChallenge ? "Device code active and waiting for approval." : "No device flow request active."}</p>
           </article>
         </div>
       </div>
@@ -661,46 +563,57 @@ function InstallRoute() {
   );
 }
 
-function DiagnosticsRoute(props: { pairingToken: string | null; runtime: string; version: string }) {
+function DiagnosticsRoute(props: {
+  accountLabel: string;
+  devCliAvailable: boolean;
+  models: { id: string; label: string }[];
+  runtime: RuntimeState;
+}) {
   return (
     <section className="stage stage-hero">
       <div className="diagnostics-head">
         <p className="eyebrow">Diagnostics</p>
-        <h2>Runtime facts</h2>
+        <h2>Session facts</h2>
       </div>
       <dl className="diagnostics-grid">
         <div>
-          <dt>Pairing</dt>
-          <dd>{props.pairingToken ? "yes" : "no"}</dd>
+          <dt>Authenticated</dt>
+          <dd>{props.runtime === "ready" ? "yes" : "no"}</dd>
         </div>
         <div>
           <dt>Runtime</dt>
           <dd>{props.runtime}</dd>
         </div>
         <div>
-          <dt>Bridge version</dt>
-          <dd>{props.version}</dd>
+          <dt>Account</dt>
+          <dd>{props.accountLabel}</dd>
+        </div>
+        <div>
+          <dt>Dev CLI</dt>
+          <dd>{props.devCliAvailable ? "enabled" : "disabled"}</dd>
+        </div>
+        <div>
+          <dt>Models</dt>
+          <dd>{props.models.length ? props.models.map((model) => model.label).join(", ") : "none"}</dd>
         </div>
       </dl>
     </section>
   );
 }
 
-export function formatRuntimeLabel(runtime: RuntimeState) {
+function formatRuntimeLabel(runtime: RuntimeState) {
   if (runtime === "ready") return "Ready";
-  if (runtime === "offline") return "Offline";
-  if (runtime === "unpaired") return "Unpaired";
-  return "Auth required";
+  if (runtime === "loading") return "Loading";
+  return "Signed out";
 }
 
-export function runtimeSummary(runtime: RuntimeState) {
-  if (runtime === "offline") return "Bridge not reachable on localhost.";
-  if (runtime === "unpaired") return "Pairing required before protected calls.";
-  if (runtime === "unauthenticated") return "GitHub auth still pending in bridge.";
+function runtimeSummary(runtime: RuntimeState) {
+  if (runtime === "loading") return "Checking hosted session.";
+  if (runtime === "signed_out") return "GitHub sign-in required.";
   return "Inference path armed.";
 }
 
-export function readErrorMessage(errorValue: unknown) {
+function readErrorMessage(errorValue: unknown) {
   if (errorValue instanceof Error) {
     return errorValue.message;
   }
@@ -709,5 +622,5 @@ export function readErrorMessage(errorValue: unknown) {
     return errorValue;
   }
 
-  return "bridge_request_failed";
+  return "github_bff_request_failed";
 }

@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "bun run --filter @copilotchat/web build",
+  "devCommand": "cd apps/web && vite --port $PORT",
   "installCommand": "bun install",
   "outputDirectory": "apps/web/dist"
 }

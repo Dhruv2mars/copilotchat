@@ -11,7 +11,6 @@ export interface AppSession {
 
 export interface AppState {
   activeSessionId: string | null;
-  pairingToken: string | null;
   sessionSearch: string;
   sessions: AppSession[];
   appendMessage(sessionId: string, message: ChatMessage): void;
@@ -20,7 +19,6 @@ export interface AppState {
   renameSession(sessionId: string, title: string): void;
   setActiveSession(sessionId: string): void;
   setDraft(sessionId: string, draft: string): void;
-  setPairingToken(token: string | null): void;
   setSessionSearch(value: string): void;
   upsertMessage(sessionId: string, message: ChatMessage): void;
 }
@@ -38,7 +36,6 @@ export function createAppStore() {
     persist(
       (set) => ({
         activeSessionId: null,
-        pairingToken: null,
         sessionSearch: "",
         sessions: [],
         appendMessage: (sessionId, message) =>
@@ -63,7 +60,7 @@ export function createAppStore() {
                     draft: "",
                     id: sessionId,
                     messages: [],
-                    title: "Fresh bridge run"
+                    title: "Fresh chat"
                   },
                   ...state.sessions
                 ]
@@ -102,10 +99,6 @@ export function createAppStore() {
                 : session
             )
           })),
-        setPairingToken: (token) =>
-          set({
-            pairingToken: token
-          }),
         setSessionSearch: (value) =>
           set({
             sessionSearch: value
@@ -144,7 +137,7 @@ export function createAppStore() {
 }
 
 function normalizeTitle(currentTitle: string, content: string) {
-  if (currentTitle !== "Fresh bridge run") {
+  if (currentTitle !== "Fresh chat") {
     return currentTitle;
   }
 

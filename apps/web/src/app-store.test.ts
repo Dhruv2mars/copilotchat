@@ -33,7 +33,7 @@ describe("app-store", () => {
     expect(store.getState().sessions).toHaveLength(0);
   });
 
-  it("covers store mutations for pairing, search, selection, and message upserts", () => {
+  it("covers search, selection, and message upserts", () => {
     const store = createAppStore();
     const firstId = createSessionId();
     const secondId = createSessionId();
@@ -57,13 +57,11 @@ describe("app-store", () => {
       role: "assistant"
     });
     store.getState().setDraft(firstId, "draft");
-    store.getState().setPairingToken("pair-token");
     store.getState().setSessionSearch("Pinned");
     store.getState().setActiveSession(firstId);
 
     expect(store.getState()).toMatchObject({
       activeSessionId: firstId,
-      pairingToken: "pair-token",
       sessionSearch: "Pinned"
     });
     expect(store.getState().sessions.find((session) => session.id === firstId)?.messages).toEqual([
@@ -86,7 +84,7 @@ describe("app-store", () => {
       id: "m2",
       role: "user"
     });
-    expect(store.getState().sessions[0]?.title).toBe("Fresh bridge run");
+    expect(store.getState().sessions[0]?.title).toBe("Fresh chat");
 
     store.getState().setActiveSession(secondId);
     store.getState().deleteSession(firstId);
