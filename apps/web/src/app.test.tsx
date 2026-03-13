@@ -85,6 +85,10 @@ describe("App", () => {
           id: "assistant-1",
           role: "assistant"
         },
+        usedModel: {
+          id: "openai/gpt-4.1",
+          label: "OpenAI GPT-4.1"
+        },
         usage: {
           inputTokens: 13,
           outputTokens: 3
@@ -252,5 +256,93 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Connect PAT" }));
     expect(await screen.findByRole("heading", { name: "Dhruv2mars" })).toBeInTheDocument();
     expect(screen.queryByDisplayValue("github_pat_test")).toBeNull();
+  });
+
+  it("switches the picker when the server falls back after no_access", async () => {
+    const client = createBaseClient({
+      bootstrap: vi.fn().mockResolvedValue(createReadyBootstrap()),
+      completeChat: vi.fn().mockResolvedValue({
+        message: {
+          content: "fallback ok",
+          id: "assistant-1",
+          role: "assistant"
+        },
+        usedModel: {
+          id: "openai/gpt-5-mini",
+          label: "OpenAI GPT-5 mini"
+        },
+        usage: {
+          inputTokens: 13,
+          outputTokens: 3
+        }
+      })
+    });
+
+    renderApp(client);
+
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText("Model"), "openai/gpt-4.1");
+    await user.type(screen.getByLabelText("Message"), "hi");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("fallback ok")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("Used OpenAI GPT-5 mini after OpenAI GPT-4.1 returned no_access. 3 output tokens.")
+    ).not.toHaveLength(0);
+    expect(screen.getByLabelText("Model")).toHaveValue("openai/gpt-5-mini");
+  });
+
+  it("uses raw model ids in fallback notes when the requested model is unknown", async () => {
+    const client = createBaseClient({
+      bootstrap: vi.fn().mockResolvedValue({
+        ...createReadyBootstrap(),
+        models: [
+          {
+            id: "openai/gpt-5-mini",
+            label: "OpenAI GPT-5 mini"
+          }
+        ]
+      }),
+      completeChat: vi.fn().mockResolvedValue({
+        message: {
+          content: "fallback ok",
+          id: "assistant-1",
+          role: "assistant"
+        },
+        usedModel: {
+          id: "openai/gpt-5-mini",
+          label: "OpenAI GPT-5 mini"
+        },
+        usage: {
+          inputTokens: 13,
+          outputTokens: 3
+        }
+      })
+    });
+
+    renderApp(client);
+
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText("Model"), "openai/gpt-5-mini");
+    client.completeChat = vi.fn().mockResolvedValue({
+      message: {
+        content: "fallback ok",
+        id: "assistant-1",
+        role: "assistant"
+      },
+      usedModel: {
+        id: "openai/gpt-5-mini",
+        label: "OpenAI GPT-5 mini"
+      },
+      usage: {
+        inputTokens: 13,
+        outputTokens: 3
+      }
+    });
+    await user.type(screen.getByLabelText("Message"), "hi");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("fallback ok")).toBeInTheDocument();
+    expect(screen.getAllByText("3 output tokens")).not.toHaveLength(0);
   });
 });

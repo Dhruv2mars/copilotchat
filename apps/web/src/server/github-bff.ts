@@ -69,12 +69,12 @@ interface ChatCompletionPayload {
 }
 
 const copilotGaModels = [
+  { id: "openai/gpt-5-mini", label: "OpenAI GPT-5 mini" },
   { id: "openai/gpt-4.1", label: "OpenAI GPT-4.1" },
   { id: "openai/gpt-4o", label: "OpenAI GPT-4o" },
   { id: "openai/gpt-5", label: "OpenAI GPT-5" },
-  { id: "openai/gpt-5-mini", label: "OpenAI GPT-5 mini" },
-  { id: "openai/o3", label: "OpenAI o3" },
-  { id: "openai/o4-mini", label: "OpenAI o4-mini" }
+  { id: "openai/o4-mini", label: "OpenAI o4-mini" },
+  { id: "openai/o3", label: "OpenAI o3" }
 ] as const;
 
 export function createGitHubBff(options: {
@@ -209,40 +209,53 @@ export function createGitHubBff(options: {
         throw new Error("auth_required");
       }
 
-      const response = await fetchFn(`${modelsBaseUrl}/inference/chat/completions`, {
-        body: JSON.stringify({
-          messages: input.request.messages.map(toUpstreamMessage),
-          model: input.request.modelId,
-          stream: false
-        }),
-        headers: {
-          ...githubHeaders(session.token),
-          "content-type": "application/json"
-        },
-        method: "POST"
-      });
+      let lastError = "github_models_request_failed";
+      for (const modelId of inferenceAttemptOrder(input.request.modelId)) {
+        const response = await fetchFn(`${modelsBaseUrl}/inference/chat/completions`, {
+          body: JSON.stringify({
+            messages: input.request.messages.map(toUpstreamMessage),
+            model: modelId,
+            stream: false
+          }),
+          headers: {
+            ...githubHeaders(session.token),
+            "content-type": "application/json"
+          },
+          method: "POST"
+        });
 
-      if (!response.ok) {
-        throw new Error(await readError(response));
-      }
-
-      const payload = (await response.json()) as ChatCompletionPayload;
-      const content = normalizeAssistantContent(payload.choices?.[0]?.message?.content);
-      if (!content) {
-        throw new Error("chat_empty");
-      }
-
-      return {
-        message: {
-          content,
-          id: randomUUID(),
-          role: "assistant"
-        },
-        usage: {
-          inputTokens: payload.usage?.prompt_tokens ?? payload.usage?.input_tokens ?? 0,
-          outputTokens: payload.usage?.completion_tokens ?? payload.usage?.output_tokens ?? 0
+        if (!response.ok) {
+          lastError = await readError(response);
+          if (lastError === "no_access") {
+            continue;
+          }
+          throw new Error(lastError);
         }
-      };
+
+        const payload = (await response.json()) as ChatCompletionPayload;
+        const content = normalizeAssistantContent(payload.choices?.[0]?.message?.content);
+        if (!content) {
+          throw new Error("chat_empty");
+        }
+
+        return {
+          message: {
+            content,
+            id: randomUUID(),
+            role: "assistant"
+          },
+          usedModel: {
+            id: modelId,
+            label: labelForModel(modelId)
+          },
+          usage: {
+            inputTokens: payload.usage?.prompt_tokens ?? payload.usage?.input_tokens ?? 0,
+            outputTokens: payload.usage?.completion_tokens ?? payload.usage?.output_tokens ?? 0
+          }
+        };
+      }
+
+      throw new Error(lastError);
     },
 
     async logout() {
@@ -624,6 +637,14 @@ function isChatCapable(model: CatalogModelRecord) {
 function maskToken(token: string) {
   const trimmed = token.trim();
   return trimmed.length <= 8 ? trimmed : `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
+}
+
+function inferenceAttemptOrder(selectedModelId: string) {
+  return [selectedModelId, ...copilotGaModels.map((model) => model.id).filter((id) => id !== selectedModelId)];
+}
+
+function labelForModel(modelId: string) {
+  return copilotGaModels.find((model) => model.id === modelId)?.label ?? modelId;
 }
 
 function normalizeAssistantContent(

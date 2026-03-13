@@ -602,4 +602,108 @@ describe("github-bff extra", () => {
       }
     });
   });
+
+  it("falls back to the next candidate model after no_access", async () => {
+    const bff = createGitHubBff({
+      allowDevCliAuth: true,
+      clientId: "client-1",
+      cookieSecret: "secret-secret-secret-secret",
+      execCommand: vi.fn(),
+      fetchFn: vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "no_access"
+              }
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: "fallback ok"
+                  }
+                }
+              ],
+              usage: {
+                completion_tokens: 2,
+                prompt_tokens: 3
+              }
+            })
+          )
+        )
+    });
+
+    await expect(
+      bff.completeChat({
+        cookieHeader: sealSessionCookie({
+          accountLabel: "Dhruv2mars",
+          cookieSecret: "secret-secret-secret-secret",
+          token: "gho_token_12345678"
+        }),
+        request: {
+          messages: [],
+          modelId: "openai/gpt-4.1",
+          requestId: "req-1"
+        }
+      })
+    ).resolves.toMatchObject({
+      message: {
+        content: "fallback ok"
+      },
+      usedModel: {
+        id: "openai/gpt-5-mini",
+        label: "OpenAI GPT-5 mini"
+      }
+    });
+  });
+
+  it("throws no_access after every candidate fails", async () => {
+    const fetchFn = vi.fn();
+    for (let index = 0; index < 6; index += 1) {
+      fetchFn.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "no_access"
+            }
+          }),
+          {
+            status: 403
+          }
+        )
+      );
+    }
+
+    const bff = createGitHubBff({
+      allowDevCliAuth: true,
+      clientId: "client-1",
+      cookieSecret: "secret-secret-secret-secret",
+      execCommand: vi.fn(),
+      fetchFn
+    });
+
+    await expect(
+      bff.completeChat({
+        cookieHeader: sealSessionCookie({
+          accountLabel: "Dhruv2mars",
+          cookieSecret: "secret-secret-secret-secret",
+          token: "gho_token_12345678"
+        }),
+        request: {
+          messages: [],
+          modelId: "openai/gpt-4.1",
+          requestId: "req-1"
+        }
+      })
+    ).rejects.toThrow("no_access");
+  });
 });
