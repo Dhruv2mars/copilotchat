@@ -18,5 +18,5 @@ test("pair, connect, chat", async ({ page, request }) => {
   await page.getByRole("button", { name: "Send" }).click();
 
   await expect(page.getByText("Fake bridge online. Ship it")).toBeVisible();
-  await expect(page.getByText(/output tokens/i)).toBeVisible();
+  await expect(page.getByText(/output tokens/i).first()).toBeVisible();
 });

@@ -15,7 +15,7 @@ import type {
   PairStartResponse
 } from "@copilotchat/shared";
 
-import { App } from "./App";
+import { App, ChatRoute, formatRuntimeLabel, readErrorMessage, runtimeSummary } from "./App";
 import { createAppStore } from "./app-store";
 import type { BridgeClient } from "./bridge-client";
 
@@ -79,6 +79,22 @@ afterEach(() => {
 });
 
 describe("App", () => {
+  it("covers runtime and error helper branches", () => {
+    expect(formatRuntimeLabel("ready")).toBe("Ready");
+    expect(formatRuntimeLabel("offline")).toBe("Offline");
+    expect(formatRuntimeLabel("unpaired")).toBe("Unpaired");
+    expect(formatRuntimeLabel("unauthenticated")).toBe("Auth required");
+
+    expect(runtimeSummary("ready")).toBe("Inference path armed.");
+    expect(runtimeSummary("offline")).toBe("Bridge not reachable on localhost.");
+    expect(runtimeSummary("unpaired")).toBe("Pairing required before protected calls.");
+    expect(runtimeSummary("unauthenticated")).toBe("GitHub auth still pending in bridge.");
+
+    expect(readErrorMessage(new Error("boom"))).toBe("boom");
+    expect(readErrorMessage("bad")).toBe("bad");
+    expect(readErrorMessage({ nope: true })).toBe("bridge_request_failed");
+  });
+
   it("shows install help when bridge is offline", async () => {
     const client: BridgeClient = {
       abortChat: vi.fn(),
@@ -96,6 +112,43 @@ describe("App", () => {
 
     expect(await screen.findByText("Install the bridge")).toBeInTheDocument();
     expect(screen.getByText("macOS")).toBeInTheDocument();
+  });
+
+  it("marks install nav active and shows no-match session copy", async () => {
+    const store = createAppStore();
+    store.getState().setPairingToken("pair-token");
+    store.getState().createSession("session-1");
+
+    const client: BridgeClient = {
+      abortChat: vi.fn(),
+      confirmPairing: vi.fn(),
+      health: vi.fn().mockResolvedValue({
+        auth: createAuthSession(),
+        bridgeVersion: "1.0.0",
+        protocolVersion: "2026-03-13",
+        status: "ok"
+      }),
+      listModels: vi.fn().mockResolvedValue([
+        {
+          id: "gpt-4.1",
+          label: "GPT-4.1"
+        }
+      ]),
+      logout: vi.fn(),
+      pollDeviceAuth: vi.fn(),
+      startDeviceAuth: vi.fn(),
+      startPairing: vi.fn(),
+      streamChat: vi.fn()
+    };
+
+    renderApp(client, "/install", store);
+
+    expect(await screen.findByRole("link", { name: "Install" })).toHaveClass("active");
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("link", { name: "Chat" }));
+    await user.type(await screen.findByLabelText("Search sessions"), "zzz");
+    expect(screen.getByText("No search matches.")).toBeInTheDocument();
   });
 
   it("pairs, runs github device auth, and streams a chat session", async () => {
@@ -299,13 +352,13 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "Send" }));
     expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
     expect(await screen.findByText("partial")).toBeInTheDocument();
-    expect(screen.getByText("stream interrupted")).toBeInTheDocument();
+    expect(await screen.findAllByText("stream interrupted")).toHaveLength(3);
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => {
       expect(client.abortChat).toHaveBeenCalled();
     });
-    expect(await screen.findByText("Generation stopped")).toBeInTheDocument();
+    expect(await screen.findAllByText("Generation stopped")).toHaveLength(3);
 
     await user.click(screen.getByRole("button", { name: "Logout" }));
     expect(await screen.findByRole("button", { name: "Connect with GitHub" })).toBeInTheDocument();
@@ -337,6 +390,95 @@ describe("App", () => {
 
     expect(await screen.findByText("Runtime facts")).toBeInTheDocument();
     expect(screen.getByText("no")).toBeInTheDocument();
+  });
+
+  it("shows empty ready thread state", async () => {
+    const store = createAppStore();
+    store.getState().setPairingToken("pair-token");
+    store.getState().createSession("session-1");
+
+    const client: BridgeClient = {
+      abortChat: vi.fn(),
+      confirmPairing: vi.fn(),
+      health: vi.fn().mockResolvedValue({
+        auth: createAuthSession(),
+        bridgeVersion: "1.0.0",
+        protocolVersion: "2026-03-13",
+        status: "ok"
+      }),
+      listModels: vi.fn().mockResolvedValue([
+        {
+          id: "gpt-4.1",
+          label: "GPT-4.1"
+        }
+      ]),
+      logout: vi.fn(),
+      pollDeviceAuth: vi.fn(),
+      startDeviceAuth: vi.fn(),
+      startPairing: vi.fn(),
+      streamChat: vi.fn()
+    };
+
+    renderApp(client, "/chat", store);
+
+    expect(await screen.findByRole("heading", { name: "Ask through your local Copilot bridge" })).toBeInTheDocument();
+    expect(screen.getByText("Ready for chat")).toBeInTheDocument();
+  });
+
+  it("shows ready state before first session hydrates", async () => {
+    const store = createAppStore();
+    store.getState().setPairingToken("pair-token");
+
+    const client: BridgeClient = {
+      abortChat: vi.fn(),
+      confirmPairing: vi.fn(),
+      health: vi.fn().mockResolvedValue({
+        auth: createAuthSession(),
+        bridgeVersion: "1.0.0",
+        protocolVersion: "2026-03-13",
+        status: "ok"
+      }),
+      listModels: vi.fn().mockResolvedValue([
+        {
+          id: "gpt-4.1",
+          label: "GPT-4.1"
+        }
+      ]),
+      logout: vi.fn(),
+      pollDeviceAuth: vi.fn(),
+      startDeviceAuth: vi.fn(),
+      startPairing: vi.fn(),
+      streamChat: vi.fn()
+    };
+
+    renderApp(client, "/chat", store);
+
+    expect(await screen.findByRole("heading", { name: "Ask through your local Copilot bridge" })).toBeInTheDocument();
+  });
+
+  it("renders empty ready state when active session is null", () => {
+    render(
+      <ChatRoute
+        activeSession={null}
+        accountLabel="dhruv2mars"
+        authChallenge={null}
+        models={[]}
+        organizationDraft=""
+        pairBridge={vi.fn()}
+        pendingRequestId={null}
+        runtime="ready"
+        selectedModel=""
+        sendMessage={vi.fn()}
+        setDraft={vi.fn()}
+        setOrganizationDraft={vi.fn()}
+        setSelectedModel={vi.fn()}
+        startGitHubAuth={vi.fn()}
+        statusNote=""
+        stopStreaming={null}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "Ask through your local Copilot bridge" })).toBeInTheDocument();
   });
 
   it("surfaces pair, auth-start, and logout failures", async () => {
@@ -375,10 +517,10 @@ describe("App", () => {
     store.getState().setPairingToken("pair-token");
     renderApp(failingPairClient, "/chat", store);
     await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
-    expect(await screen.findByText("auth_failed")).toBeInTheDocument();
+    expect(await screen.findAllByText("auth_failed")).toHaveLength(2);
 
     await user.click(screen.getByRole("button", { name: "Logout" }));
-    expect(await screen.findByText("bridge_request_failed")).toBeInTheDocument();
+    expect(await screen.findAllByText("bad")).toHaveLength(2);
   });
 
   it("surfaces auth-poll, send, and stop failures", async () => {
@@ -409,7 +551,7 @@ describe("App", () => {
     const user = userEvent.setup();
     const connectView = renderApp(connectClient, "/chat", unauthStore);
     await user.click(await screen.findByRole("button", { name: "Connect with GitHub" }));
-    expect(await screen.findByText("auth_poll_failed")).toBeInTheDocument();
+    expect(await screen.findAllByText("auth_poll_failed")).toHaveLength(2);
 
     connectView.unmount();
     localStorage.clear();
@@ -461,13 +603,13 @@ describe("App", () => {
 
     renderApp(readyClient, "/chat", readyStore);
     await user.click(await screen.findByRole("button", { name: "Send" }));
-    expect(await screen.findByText("send_failed")).toBeInTheDocument();
+    expect(await screen.findAllByText("send_failed")).toHaveLength(3);
 
     readyStore.getState().setDraft("session-1", "Try again");
     await user.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByRole("button", { name: "Stop" });
     await user.click(screen.getByRole("button", { name: "Stop" }));
-    expect(await screen.findByText("abort_failed")).toBeInTheDocument();
+    expect(await screen.findAllByText("abort_failed")).toHaveLength(3);
     releaseStream();
   });
 
