@@ -40,6 +40,7 @@ interface AccessTokenPayload {
 
 interface SessionCookiePayload {
   accountLabel: string;
+  models?: ListedModel[];
   token: string;
   tokenHint: string;
 }
@@ -71,10 +72,7 @@ interface ChatCompletionPayload {
 const copilotGaModels = [
   { id: "openai/gpt-5-mini", label: "OpenAI GPT-5 mini" },
   { id: "openai/gpt-4.1", label: "OpenAI GPT-4.1" },
-  { id: "openai/gpt-4o", label: "OpenAI GPT-4o" },
-  { id: "openai/gpt-5", label: "OpenAI GPT-5" },
-  { id: "openai/o4-mini", label: "OpenAI o4-mini" },
-  { id: "openai/o3", label: "OpenAI o3" }
+  { id: "openai/gpt-4o", label: "OpenAI GPT-4o" }
 ] as const;
 
 export function createGitHubBff(options: {
@@ -119,15 +117,13 @@ export function createGitHubBff(options: {
         ...(await bootstrapResponse({
           auth: buildAuthResponse(session),
           devCliAvailable: options.allowDevCliAuth,
-          fetchFn,
-          models: session.models,
-          modelsBaseUrl,
-          token: session.token
+          models: session.models
         })),
         setCookieHeader: sealSessionCookie({
           accountLabel: session.accountLabel,
           cookieName,
           cookieSecret: options.cookieSecret,
+          models: session.models,
           secure: secureCookies,
           token: session.token,
           tokenHint: session.tokenHint
@@ -156,15 +152,13 @@ export function createGitHubBff(options: {
         ...(await bootstrapResponse({
           auth: buildAuthResponse(session),
           devCliAvailable: options.allowDevCliAuth,
-          fetchFn,
-          models: session.models,
-          modelsBaseUrl,
-          token: session.token
+          models: session.models
         })),
         setCookieHeader: sealSessionCookie({
           accountLabel: session.accountLabel,
           cookieName,
           cookieSecret: options.cookieSecret,
+          models: session.models,
           secure: secureCookies,
           token: session.token,
           tokenHint: session.tokenHint
@@ -184,12 +178,36 @@ export function createGitHubBff(options: {
       }
 
       try {
+        if (!session.models?.length) {
+          const refreshedSession = await resolveSession({
+            apiBaseUrl,
+            fetchFn,
+            modelsBaseUrl,
+            token: session.token
+          });
+
+          return {
+            ...(await bootstrapResponse({
+              auth: buildAuthResponse(refreshedSession),
+              devCliAvailable: options.allowDevCliAuth,
+              models: refreshedSession.models
+            })),
+            setCookieHeader: sealSessionCookie({
+              accountLabel: refreshedSession.accountLabel,
+              cookieName,
+              cookieSecret: options.cookieSecret,
+              models: refreshedSession.models,
+              secure: secureCookies,
+              token: refreshedSession.token,
+              tokenHint: refreshedSession.tokenHint
+            })
+          };
+        }
+
         return await bootstrapResponse({
           auth: buildAuthResponse(session),
           devCliAvailable: options.allowDevCliAuth,
-          fetchFn,
-          modelsBaseUrl,
-          token: session.token
+          models: session.models
         });
       } catch {
         return {
@@ -210,7 +228,10 @@ export function createGitHubBff(options: {
       }
 
       let lastError = "github_models_request_failed";
-      for (const modelId of inferenceAttemptOrder(input.request.modelId)) {
+      for (const modelId of inferenceAttemptOrder(
+        input.request.modelId,
+        session.models?.map((model) => model.id)
+      )) {
         const response = await fetchFn(`${modelsBaseUrl}/inference/chat/completions`, {
           body: JSON.stringify({
             messages: input.request.messages.map(toUpstreamMessage),
@@ -299,15 +320,13 @@ export function createGitHubBff(options: {
         ...(await bootstrapResponse({
           auth: buildAuthResponse(session),
           devCliAvailable: options.allowDevCliAuth,
-          fetchFn,
-          models: session.models,
-          modelsBaseUrl,
-          token: session.token
+          models: session.models
         })),
         setCookieHeader: sealSessionCookie({
           accountLabel: session.accountLabel,
           cookieName,
           cookieSecret: options.cookieSecret,
+          models: session.models,
           secure: secureCookies,
           token: session.token,
           tokenHint: session.tokenHint
@@ -357,12 +376,14 @@ export function sealSessionCookie(input: {
   accountLabel: string;
   cookieName?: string;
   cookieSecret: string;
+  models?: ListedModel[];
   secure?: boolean;
   token: string;
   tokenHint?: string;
 }) {
   const payload = JSON.stringify({
     accountLabel: input.accountLabel,
+    models: input.models,
     token: input.token,
     tokenHint: input.tokenHint ?? maskToken(input.token)
   } satisfies SessionCookiePayload);
@@ -403,21 +424,12 @@ export function splitSetCookieHeader(value: string) {
 async function bootstrapResponse(input: {
   auth: AuthSessionResponse;
   devCliAvailable: boolean;
-  fetchFn: AppFetch;
-  models?: ListedModel[];
-  modelsBaseUrl: string;
-  token: string;
+  models: ListedModel[];
 }): Promise<AppBootstrapResponse> {
   return {
     auth: input.auth,
     devCliAvailable: input.devCliAvailable,
-    models:
-      input.models ??
-      (await listModels({
-        fetchFn: input.fetchFn,
-        modelsBaseUrl: input.modelsBaseUrl,
-        token: input.token
-      }))
+    models: input.models
   };
 }
 
@@ -525,11 +537,20 @@ async function resolveSession(input: {
   modelsBaseUrl: string;
   token: string;
 }) {
-  const models = await validateModelsAccess({
+  const catalogModels = await validateModelsAccess({
     fetchFn: input.fetchFn,
     modelsBaseUrl: input.modelsBaseUrl,
     token: input.token
   });
+  const models = await probeReachableModels({
+    fetchFn: input.fetchFn,
+    models: catalogModels,
+    modelsBaseUrl: input.modelsBaseUrl,
+    token: input.token
+  });
+  if (!models.length) {
+    throw new Error("no_inference_access");
+  }
 
   return {
     accountLabel: await lookupViewerLabel({
@@ -639,8 +660,69 @@ function maskToken(token: string) {
   return trimmed.length <= 8 ? trimmed : `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
 }
 
-function inferenceAttemptOrder(selectedModelId: string) {
-  return [selectedModelId, ...copilotGaModels.map((model) => model.id).filter((id) => id !== selectedModelId)];
+async function probeReachableModels(input: {
+  fetchFn: AppFetch;
+  models: ListedModel[];
+  modelsBaseUrl: string;
+  token: string;
+}) {
+  const reachableModels: ListedModel[] = [];
+
+  for (const model of input.models) {
+    if (
+      await probeModelAccess({
+        fetchFn: input.fetchFn,
+        modelId: model.id,
+        modelsBaseUrl: input.modelsBaseUrl,
+        token: input.token
+      })
+    ) {
+      reachableModels.push(model);
+    }
+  }
+
+  return reachableModels;
+}
+
+async function probeModelAccess(input: {
+  fetchFn: AppFetch;
+  modelId: string;
+  modelsBaseUrl: string;
+  token: string;
+}) {
+  const response = await input.fetchFn(`${input.modelsBaseUrl}/inference/chat/completions`, {
+    body: JSON.stringify({
+      messages: [
+        {
+          content: "Reply with ok.",
+          role: "user"
+        }
+      ],
+      model: input.modelId,
+      stream: false
+    }),
+    headers: {
+      ...githubHeaders(input.token),
+      "content-type": "application/json"
+    },
+    method: "POST"
+  });
+
+  if (response.ok) {
+    return true;
+  }
+
+  const error = await readError(response);
+  if (error === "no_access") {
+    return false;
+  }
+
+  throw new Error(error);
+}
+
+function inferenceAttemptOrder(selectedModelId: string, availableModelIds?: string[]) {
+  const modelIds = availableModelIds?.length ? availableModelIds : copilotGaModels.map((model) => model.id);
+  return [selectedModelId, ...modelIds.filter((id) => id !== selectedModelId)];
 }
 
 function labelForModel(modelId: string) {

@@ -240,7 +240,7 @@ function CommandRail(props: {
         <p className="eyebrow">Copilot Chat</p>
         <h1>Hosted BFF, no local bridge.</h1>
         <p className="lead-copy">
-          GitHub auth and GitHub Models run through a thin serverless backend; picker stays pinned to current Copilot GA models.
+          GitHub auth and GitHub Models run through a thin serverless backend; picker stays pinned to current included Copilot chat models that validate for this token.
         </p>
       </div>
 
@@ -320,7 +320,7 @@ function RuntimeAside(props: { modelCount: number; runtime: RuntimeState }) {
         <ul className="policy-list">
           <li>GitHub token stays in an http-only session cookie, not JS storage.</li>
           <li>Models traffic goes through the hosted BFF because GitHub Models is not browser-CORS friendly.</li>
-          <li>Only Copilot GA models that also resolve in the GitHub Models API stay in the picker.</li>
+          <li>Only current included Copilot chat models that pass a real access check stay in the picker.</li>
           <li>No local daemon, pairing dance, or machine-specific runtime needed.</li>
         </ul>
       </section>
@@ -579,11 +579,11 @@ function runtimeSummary(runtime: RuntimeState) {
 
 function readErrorMessage(errorValue: unknown) {
   if (errorValue instanceof Error) {
-    return errorValue.message;
+    return friendlyError(errorValue.message);
   }
 
   if (typeof errorValue === "string") {
-    return errorValue;
+    return friendlyError(errorValue);
   }
 
   return "github_bff_request_failed";
@@ -592,4 +592,16 @@ function readErrorMessage(errorValue: unknown) {
 function labelForModel(models: Array<{ id: string; label: string }>, modelId: string) {
   /* v8 ignore next */
   return models.find((model) => model.id === modelId)?.label ?? modelId;
+}
+
+function friendlyError(error: string) {
+  if (error === "github_models_pat_required") {
+    return "PAT lacks GitHub Models access";
+  }
+
+  if (error === "no_inference_access") {
+    return "This account/token cannot run chat inference on the current included Copilot models.";
+  }
+
+  return error;
 }

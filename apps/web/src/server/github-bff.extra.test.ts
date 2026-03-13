@@ -140,16 +140,16 @@ describe("github-bff extra", () => {
   });
 
   it("covers secure cookies, catalog variants, array content, and user failures", async () => {
-    const fetchFn = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(
+    const fetchFn = vi.fn(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/catalog/models")) {
+        return new Response(
           JSON.stringify({
             data: [
               {
                 capabilities: ["chat"],
-                id: "model-cap",
-                name: "Cap model"
+                id: "openai/gpt-5-mini",
+                name: "OpenAI GPT-5 mini"
               },
               {
                 id: "model-task",
@@ -168,17 +168,34 @@ describe("github-bff extra", () => {
               }
             ]
           })
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
+        );
+      }
+
+      if (url.endsWith("/user")) {
+        return new Response(
           JSON.stringify({
             login: "Dhruv2mars"
           })
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
+        );
+      }
+
+      if (url.endsWith("/inference/chat/completions")) {
+        const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }> };
+        if (body.messages?.[0]?.content === "Reply with ok.") {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: "ok"
+                  }
+                }
+              ]
+            })
+          );
+        }
+
+        return new Response(
           JSON.stringify({
             choices: [
               {
@@ -192,8 +209,11 @@ describe("github-bff extra", () => {
               output_tokens: 1
             }
           })
-        )
-      );
+        );
+      }
+
+      return new Response("not found", { status: 404 });
+    });
 
     const bff = createGitHubBff({
       allowDevCliAuth: true,
@@ -214,7 +234,12 @@ describe("github-bff extra", () => {
         accountLabel: "Dhruv2mars",
         authenticated: true
       },
-      models: []
+      models: [
+        {
+          id: "openai/gpt-5-mini",
+          label: "OpenAI GPT-5 mini"
+        }
+      ]
     });
     expect(bootstrap.setCookieHeader).toContain("Secure");
 
@@ -229,7 +254,7 @@ describe("github-bff extra", () => {
               role: "user"
             }
           ],
-          modelId: "model-cap",
+          modelId: "openai/gpt-5-mini",
           requestId: "req-1"
         }
       })
@@ -252,27 +277,48 @@ describe("github-bff extra", () => {
         ok: true,
         stdout: "gho_cli_12345678\n"
       }),
-      fetchFn: vi
-        .fn()
-        .mockResolvedValueOnce(
-          new Response(
+      fetchFn: vi.fn(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/catalog/models")) {
+          return new Response(
             JSON.stringify([
               {
-                id: "model-cap",
+                id: "openai/gpt-5-mini",
                 supported_input_modalities: ["text"],
                 supported_output_modalities: ["text"]
               }
             ])
-          )
-        )
-        .mockResolvedValueOnce(
-          new Response(
+          );
+        }
+
+        if (url.endsWith("/inference/chat/completions")) {
+          const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }> };
+          if (body.messages?.[0]?.content === "Reply with ok.") {
+            return new Response(
+              JSON.stringify({
+                choices: [
+                  {
+                    message: {
+                      content: "ok"
+                    }
+                  }
+                ]
+              })
+            );
+          }
+        }
+
+        if (url.endsWith("/user")) {
+          return new Response(
             JSON.stringify({
               message: "viewer_forbidden"
             }),
             { status: 403 }
-          )
-        )
+          );
+        }
+
+        return new Response("not found", { status: 404 });
+      })
     });
 
     await expect(failingUserBff.authWithCli()).resolves.toMatchObject({
@@ -280,7 +326,12 @@ describe("github-bff extra", () => {
         accountLabel: "GitHub Models",
         authenticated: true
       },
-      models: []
+      models: [
+        {
+          id: "openai/gpt-5-mini",
+          label: "OpenAI GPT-5 mini"
+        }
+      ]
     });
   });
 
@@ -350,9 +401,7 @@ describe("github-bff extra", () => {
         .mockResolvedValueOnce(new Response(JSON.stringify({})))
     });
 
-    await expect(emptyCatalogBff.authWithCli()).resolves.toMatchObject({
-      models: []
-    });
+    await expect(emptyCatalogBff.authWithCli()).rejects.toThrow("no_inference_access");
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn() as unknown as typeof fetch;
@@ -374,14 +423,14 @@ describe("github-bff extra", () => {
   });
 
   it("covers non-chat catalog records, short token hints, and array parts without text", async () => {
-    const fetchFn = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(
+    const fetchFn = vi.fn(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/catalog/models")) {
+        return new Response(
           JSON.stringify([
             {
-              capabilities: ["vision"],
-              id: "model-cap"
+              capabilities: ["chat"],
+              id: "openai/gpt-5-mini"
             },
             {
               id: "model-input",
@@ -394,17 +443,34 @@ describe("github-bff extra", () => {
               supported_output_modalities: "text"
             }
           ])
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
+        );
+      }
+
+      if (url.endsWith("/user")) {
+        return new Response(
           JSON.stringify({
             login: "Dhruv2mars"
           })
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
+        );
+      }
+
+      if (url.endsWith("/inference/chat/completions")) {
+        const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }> };
+        if (body.messages?.[0]?.content === "Reply with ok.") {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: "ok"
+                  }
+                }
+              ]
+            })
+          );
+        }
+
+        return new Response(
           JSON.stringify({
             choices: [
               {
@@ -418,8 +484,11 @@ describe("github-bff extra", () => {
               prompt_tokens: 2
             }
           })
-        )
-      );
+        );
+      }
+
+      return new Response("not found", { status: 404 });
+    });
 
     const bff = createGitHubBff({
       allowDevCliAuth: true,
@@ -437,7 +506,12 @@ describe("github-bff extra", () => {
       auth: {
         tokenHint: "short"
       },
-      models: []
+      models: [
+        {
+          id: "openai/gpt-5-mini",
+          label: "OpenAI GPT-5 mini"
+        }
+      ]
     });
 
     await expect(
@@ -580,10 +654,10 @@ describe("github-bff extra", () => {
       clientId: "client-1",
       cookieSecret: "secret-secret-secret-secret",
       execCommand: vi.fn(),
-      fetchFn: vi
-        .fn()
-        .mockResolvedValueOnce(
-          new Response(
+      fetchFn: vi.fn(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/catalog/models")) {
+          return new Response(
             JSON.stringify([
               {
                 id: "openai/gpt-5-mini",
@@ -591,9 +665,32 @@ describe("github-bff extra", () => {
                 supported_output_modalities: ["text"]
               }
             ])
-          )
-        )
-        .mockResolvedValueOnce(new Response(JSON.stringify({})))
+          );
+        }
+
+        if (url.endsWith("/inference/chat/completions")) {
+          const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }> };
+          if (body.messages?.[0]?.content === "Reply with ok.") {
+            return new Response(
+              JSON.stringify({
+                choices: [
+                  {
+                    message: {
+                      content: "ok"
+                    }
+                  }
+                ]
+              })
+            );
+          }
+        }
+
+        if (url.endsWith("/user")) {
+          return new Response(JSON.stringify({}));
+        }
+
+        return new Response("not found", { status: 404 });
+      })
     });
 
     await expect(anonymousViewerBff.authWithPat({ token: "ghp_pat_12345678" })).resolves.toMatchObject({
@@ -705,5 +802,288 @@ describe("github-bff extra", () => {
         }
       })
     ).rejects.toThrow("no_access");
+  });
+
+  it("keeps only models that pass a real inference probe", async () => {
+    const fetchFn = vi.fn(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/catalog/models")) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "openai/gpt-5-mini",
+              supported_input_modalities: ["text"],
+              supported_output_modalities: ["text"]
+            },
+            {
+              id: "openai/gpt-4.1",
+              supported_input_modalities: ["text"],
+              supported_output_modalities: ["text"]
+            },
+            {
+              id: "openai/gpt-4o",
+              supported_input_modalities: ["text"],
+              supported_output_modalities: ["text"]
+            }
+          ])
+        );
+      }
+
+      if (url.endsWith("/user")) {
+        return new Response(
+          JSON.stringify({
+            login: "Dhruv2mars"
+          })
+        );
+      }
+
+      if (url.endsWith("/inference/chat/completions")) {
+        const body = JSON.parse(String(init?.body)) as { model?: string };
+        if (body.model === "openai/gpt-4.1") {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: "ok"
+                  }
+                }
+              ]
+            })
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: "no_access"
+            }
+          }),
+          {
+            status: 403
+          }
+        );
+      }
+
+      return new Response("not found", {
+        status: 404
+      });
+    });
+
+    const bff = createGitHubBff({
+      allowDevCliAuth: false,
+      clientId: "client-1",
+      cookieSecret: "secret-secret-secret-secret",
+      execCommand: vi.fn(),
+      fetchFn
+    });
+
+    const auth = await bff.authWithPat({
+      token: "ghp_pat_12345678"
+    });
+
+    expect(auth.models).toEqual([
+      {
+        id: "openai/gpt-4.1",
+        label: "OpenAI GPT-4.1"
+      }
+    ]);
+
+    const bootstrap = await bff.bootstrap({
+      cookieHeader: auth.setCookieHeader
+    });
+
+    expect(bootstrap.models).toEqual([
+      {
+        id: "openai/gpt-4.1",
+        label: "OpenAI GPT-4.1"
+      }
+    ]);
+  });
+
+  it("rejects auth when the token cannot infer on any included model", async () => {
+    const fetchFn = vi.fn(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/catalog/models")) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "openai/gpt-5-mini",
+              supported_input_modalities: ["text"],
+              supported_output_modalities: ["text"]
+            },
+            {
+              id: "openai/gpt-4.1",
+              supported_input_modalities: ["text"],
+              supported_output_modalities: ["text"]
+            }
+          ])
+        );
+      }
+
+      if (url.endsWith("/user")) {
+        return new Response(
+          JSON.stringify({
+            login: "Dhruv2mars"
+          })
+        );
+      }
+
+      if (url.endsWith("/inference/chat/completions")) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: "no_access"
+            }
+          }),
+          {
+            status: 403
+          }
+        );
+      }
+
+      return new Response("not found", {
+        status: 404
+      });
+    });
+
+    const bff = createGitHubBff({
+      allowDevCliAuth: false,
+      clientId: "client-1",
+      cookieSecret: "secret-secret-secret-secret",
+      execCommand: vi.fn(),
+      fetchFn
+    });
+
+    await expect(
+      bff.authWithPat({
+        token: "ghp_pat_12345678"
+      })
+    ).rejects.toThrow("no_inference_access");
+  });
+
+  it("rethrows unexpected inference probe errors during auth", async () => {
+    const fetchFn = vi.fn(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/catalog/models")) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "openai/gpt-5-mini",
+              supported_input_modalities: ["text"],
+              supported_output_modalities: ["text"]
+            }
+          ])
+        );
+      }
+
+      if (url.endsWith("/inference/chat/completions")) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: "rate_limited"
+            }
+          }),
+          {
+            status: 429
+          }
+        );
+      }
+
+      return new Response("not found", {
+        status: 404
+      });
+    });
+
+    const bff = createGitHubBff({
+      allowDevCliAuth: false,
+      clientId: "client-1",
+      cookieSecret: "secret-secret-secret-secret",
+      execCommand: vi.fn(),
+      fetchFn
+    });
+
+    await expect(
+      bff.authWithPat({
+        token: "ghp_pat_12345678"
+      })
+    ).rejects.toThrow("rate_limited");
+  });
+
+  it("refreshes legacy session cookies that do not store validated models", async () => {
+    const fetchFn = vi.fn(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/catalog/models")) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "openai/gpt-5-mini",
+              supported_input_modalities: ["text"],
+              supported_output_modalities: ["text"]
+            }
+          ])
+        );
+      }
+
+      if (url.endsWith("/inference/chat/completions")) {
+        const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }> };
+        if (body.messages?.[0]?.content === "Reply with ok.") {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: "ok"
+                  }
+                }
+              ]
+            })
+          );
+        }
+      }
+
+      if (url.endsWith("/user")) {
+        return new Response(
+          JSON.stringify({
+            login: "Dhruv2mars"
+          })
+        );
+      }
+
+      return new Response("not found", {
+        status: 404
+      });
+    });
+
+    const bff = createGitHubBff({
+      allowDevCliAuth: false,
+      clientId: "client-1",
+      cookieSecret: "secret-secret-secret-secret",
+      execCommand: vi.fn(),
+      fetchFn
+    });
+
+    const bootstrap = await bff.bootstrap({
+      cookieHeader: sealSessionCookie({
+        accountLabel: "Dhruv2mars",
+        cookieSecret: "secret-secret-secret-secret",
+        token: "gho_token_12345678"
+      })
+    });
+
+    expect(bootstrap).toMatchObject({
+      auth: {
+        accountLabel: "Dhruv2mars",
+        authenticated: true
+      },
+      models: [
+        {
+          id: "openai/gpt-5-mini",
+          label: "OpenAI GPT-5 mini"
+        }
+      ]
+    });
+    expect("setCookieHeader" in bootstrap).toBe(true);
+    expect("setCookieHeader" in bootstrap ? bootstrap.setCookieHeader : "").toContain("copilotchat_session=");
   });
 });
