@@ -11,10 +11,10 @@ import {
 
 describe("github-bff", () => {
   it("supports pat auth, device auth, bootstrap, chat, cli auth, and logout", async () => {
-    const fetchFn = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(
+    const fetchFn = vi.fn(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/device/code")) {
+        return new Response(
           JSON.stringify({
             device_code: "device-1",
             expires_in: 900,
@@ -22,17 +22,19 @@ describe("github-bff", () => {
             user_code: "ABCD-EFGH",
             verification_uri: "https://github.com/login/device"
           })
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
+        );
+      }
+
+      if (url.endsWith("/oauth/access_token")) {
+        return new Response(
           JSON.stringify({
             access_token: "gho_token_12345678"
           })
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
+        );
+      }
+
+      if (url.endsWith("/catalog/models")) {
+        return new Response(
           JSON.stringify([
             {
               id: "openai/gpt-5-mini",
@@ -41,29 +43,35 @@ describe("github-bff", () => {
               supported_output_modalities: ["text"]
             }
           ])
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
+        );
+      }
+
+      if (url.endsWith("/user")) {
+        return new Response(
           JSON.stringify({
             login: "Dhruv2mars"
           })
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([
-            {
-              id: "openai/gpt-5-mini",
-              name: "OpenAI GPT-5 mini",
-              supported_input_modalities: ["text"],
-              supported_output_modalities: ["text"]
-            }
-          ])
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
+        );
+      }
+
+      if (url.endsWith("/inference/chat/completions")) {
+        const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }> };
+        if (body.messages?.[0]?.content === "Reply with ok.") {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: "ok",
+                    role: "assistant"
+                  }
+                }
+              ]
+            })
+          );
+        }
+
+        return new Response(
           JSON.stringify({
             choices: [
               {
@@ -78,46 +86,11 @@ describe("github-bff", () => {
               prompt_tokens: 13
             }
           })
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([
-            {
-              id: "openai/gpt-5-mini",
-              name: "OpenAI GPT-5 mini",
-              supported_input_modalities: ["text"],
-              supported_output_modalities: ["text"]
-            }
-          ])
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            login: "Dhruv2mars"
-          })
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([
-            {
-              id: "openai/gpt-5-mini",
-              name: "OpenAI GPT-5 mini",
-              supported_input_modalities: ["text"],
-              supported_output_modalities: ["text"]
-            }
-          ])
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            login: "Dhruv2mars"
-          })
-        )
-      );
+        );
+      }
+
+      return new Response("not found", { status: 404 });
+    });
 
     const bff = createGitHubBff({
       allowDevCliAuth: true,

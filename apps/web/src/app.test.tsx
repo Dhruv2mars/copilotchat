@@ -211,6 +211,38 @@ describe("App", () => {
     expect(await screen.findAllByText("github_bff_request_failed")).not.toHaveLength(0);
   });
 
+  it("shows a friendly message when auth cannot run inference", async () => {
+    renderApp(
+      createBaseClient({
+        authWithPat: vi.fn().mockRejectedValue(new Error("no_inference_access")),
+        bootstrap: vi.fn().mockResolvedValue(createSignedOutBootstrap())
+      })
+    );
+
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("Personal access token"), "bad-token");
+    await user.click(screen.getByRole("button", { name: "Connect PAT" }));
+    expect(
+      await screen.findAllByText(
+        "This account/token cannot run chat inference on the current included Copilot models."
+      )
+    ).not.toHaveLength(0);
+  });
+
+  it("shows a friendly message when the pat lacks models access", async () => {
+    renderApp(
+      createBaseClient({
+        authWithPat: vi.fn().mockRejectedValue(new Error("github_models_pat_required")),
+        bootstrap: vi.fn().mockResolvedValue(createSignedOutBootstrap())
+      })
+    );
+
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("Personal access token"), "bad-token");
+    await user.click(screen.getByRole("button", { name: "Connect PAT" }));
+    expect(await screen.findAllByText("PAT lacks GitHub Models access")).not.toHaveLength(0);
+  });
+
   it("covers loading, access, and no-cli states", async () => {
     const loadingView = renderApp(
       createBaseClient({
