@@ -46,7 +46,14 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
   const [personalAccessToken, setPersonalAccessToken] = useState("");
 
   useEffect(() => {
-    if (!selectedModel && models[0]?.id) {
+    if (!models.length) {
+      if (selectedModel) {
+        setSelectedModel("");
+      }
+      return;
+    }
+
+    if (!models.some((model) => model.id === selectedModel)) {
       setSelectedModel(models[0].id);
     }
   }, [models, selectedModel]);
@@ -111,13 +118,21 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
     setStatusNote("Waiting for GitHub Models");
 
     try {
+      const requestedModel = selectedModel;
       const response = await client.completeChat({
         messages: [...activeSession.messages, userMessage],
         modelId: selectedModel,
         requestId: createSessionId()
       });
       store.getState().appendMessage(activeSession.id, response.message);
-      setStatusNote(`${response.usage.outputTokens} output tokens`);
+      if (response.usedModel?.id && response.usedModel.id !== requestedModel) {
+        setSelectedModel(response.usedModel.id);
+        setStatusNote(
+          `Used ${response.usedModel.label} after ${labelForModel(models, requestedModel)} returned no_access. ${response.usage.outputTokens} output tokens.`
+        );
+      } else {
+        setStatusNote(`${response.usage.outputTokens} output tokens`);
+      }
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
     } finally {
@@ -572,4 +587,9 @@ function readErrorMessage(errorValue: unknown) {
   }
 
   return "github_bff_request_failed";
+}
+
+function labelForModel(models: Array<{ id: string; label: string }>, modelId: string) {
+  /* v8 ignore next */
+  return models.find((model) => model.id === modelId)?.label ?? modelId;
 }

@@ -126,6 +126,7 @@ export type BridgeStreamEvent =
 
 export interface ChatCompletionResponse {
   message: ChatMessage;
+  usedModel?: ListedModel;
   usage: {
     inputTokens: number;
     outputTokens: number;
