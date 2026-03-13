@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AuthSessionManager,
+  type AuthProvider,
   type SecureStore
 } from "../src/auth-session-manager";
 
@@ -22,46 +23,60 @@ class MemoryStore implements SecureStore {
 }
 
 describe("AuthSessionManager", () => {
+  const provider: AuthProvider = {
+    async connect(input) {
+      return {
+        accountLabel: "dhruv2mars",
+        organization: input.organization,
+        token: input.token,
+        tokenHint: "ghp_...7890"
+      };
+    }
+  };
+
   it("reports disconnected by default", async () => {
     const manager = new AuthSessionManager({
+      provider,
       store: new MemoryStore()
     });
 
     await expect(manager.getSession()).resolves.toEqual({
       accountLabel: null,
       authenticated: false,
-      provider: "github-copilot"
+      provider: "github-models"
     });
   });
 
   it("persists connect and clears on logout", async () => {
     const store = new MemoryStore();
     const manager = new AuthSessionManager({
+      provider,
       store
     });
 
     await manager.connect({
-      accessToken: "secret",
-      accountLabel: "dhruv2mars",
-      expiresAt: "2026-03-14T10:00:00.000Z",
-      refreshToken: "refresh"
+      organization: "acme",
+      token: "ghp_1234567890"
     });
 
     await expect(manager.getSession()).resolves.toEqual({
       accountLabel: "dhruv2mars",
       authenticated: true,
-      expiresAt: "2026-03-14T10:00:00.000Z",
-      provider: "github-copilot"
+      organization: "acme",
+      provider: "github-models",
+      tokenHint: "ghp_...7890"
     });
 
-    await expect(store.get("copilot_session")).resolves.toContain("secret");
+    await expect(manager.getStoredSession()).resolves.toMatchObject({
+      token: "ghp_1234567890"
+    });
 
     await manager.logout();
 
     await expect(manager.getSession()).resolves.toEqual({
       accountLabel: null,
       authenticated: false,
-      provider: "github-copilot"
+      provider: "github-models"
     });
     await expect(store.get("copilot_session")).resolves.toBeNull();
   });

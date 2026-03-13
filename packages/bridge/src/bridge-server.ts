@@ -84,6 +84,11 @@ export function createBridgeServer(options: {
             return error("pairing_required", 401, origin);
           }
 
+          const session = await options.auth.getSession();
+          if (!session.authenticated) {
+            return error("auth_required", 401, origin);
+          }
+
           return json(await options.modelRegistry.list(), origin);
         }
 

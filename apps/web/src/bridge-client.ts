@@ -1,4 +1,5 @@
 import type {
+  AuthConnectRequest,
   AuthSessionResponse,
   BridgeHealth,
   BridgeStreamEvent,
@@ -14,7 +15,7 @@ type BridgeFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface BridgeClient {
   abortChat(input: { origin: string; requestId: string; token: string }): Promise<void>;
-  connectAuth(): Promise<AuthSessionResponse>;
+  connectAuth(input: AuthConnectRequest): Promise<AuthSessionResponse>;
   confirmPairing(input: PairConfirmRequest): Promise<PairConfirmResponse>;
   health(): Promise<BridgeHealth>;
   listModels(input: { origin: string; token: string }): Promise<ListedModel[]>;
@@ -49,14 +50,9 @@ export function createHttpBridgeClient(options: {
         method: "POST"
       });
     },
-    async connectAuth() {
+    async connectAuth(input) {
       return requestJson(fetchFn, `${options.baseUrl}/auth/connect`, {
-        body: JSON.stringify({
-          accessToken: "local-bridge-access",
-          accountLabel: "Local Copilot",
-          expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-          refreshToken: "local-bridge-refresh"
-        }),
+        body: JSON.stringify(input),
         headers: {
           "content-type": "application/json"
         },

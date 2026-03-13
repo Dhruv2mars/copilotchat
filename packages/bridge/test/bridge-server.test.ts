@@ -69,6 +69,16 @@ describe("createBridgeServer", () => {
       gateway,
       server: createBridgeServer({
         auth: new AuthSessionManager({
+          provider: {
+            async connect(input) {
+              return {
+                accountLabel: "dhruv2mars",
+                organization: input.organization,
+                token: input.token,
+                tokenHint: "ghp_...7890"
+              };
+            }
+          },
           store: new MemoryStore()
         }),
         bridgeVersion: "1.0.0",
@@ -146,10 +156,8 @@ describe("createBridgeServer", () => {
     const connect = await server.handle(
       new Request("http://127.0.0.1/auth/connect", {
         body: JSON.stringify({
-          accessToken: "secret",
-          accountLabel: "dhruv2mars",
-          expiresAt: "2026-03-14T10:00:00.000Z",
-          refreshToken: "refresh"
+          organization: "acme",
+          token: "ghp_1234567890"
         }),
         headers: {
           "content-type": "application/json"
@@ -164,8 +172,9 @@ describe("createBridgeServer", () => {
     ).resolves.toEqual({
       accountLabel: "dhruv2mars",
       authenticated: true,
-      expiresAt: "2026-03-14T10:00:00.000Z",
-      provider: "github-copilot"
+      organization: "acme",
+      provider: "github-models",
+      tokenHint: "ghp_...7890"
     });
 
     const logout = await server.handle(
@@ -180,7 +189,7 @@ describe("createBridgeServer", () => {
     ).resolves.toEqual({
       accountLabel: null,
       authenticated: false,
-      provider: "github-copilot"
+      provider: "github-models"
     });
   });
 
@@ -202,10 +211,7 @@ describe("createBridgeServer", () => {
     await server.handle(
       new Request("http://127.0.0.1/auth/connect", {
         body: JSON.stringify({
-          accessToken: "secret",
-          accountLabel: "dhruv2mars",
-          expiresAt: "2026-03-14T10:00:00.000Z",
-          refreshToken: "refresh"
+          token: "ghp_1234567890"
         }),
         headers: {
           "content-type": "application/json"
@@ -264,10 +270,7 @@ describe("createBridgeServer", () => {
     await server.handle(
       new Request("http://127.0.0.1/auth/connect", {
         body: JSON.stringify({
-          accessToken: "secret",
-          accountLabel: "dhruv2mars",
-          expiresAt: "2026-03-14T10:00:00.000Z",
-          refreshToken: "refresh"
+          token: "ghp_1234567890"
         }),
         headers: {
           "content-type": "application/json"
@@ -336,6 +339,17 @@ describe("createBridgeServer", () => {
     );
 
     expect(optionsResponse.headers.get("access-control-allow-origin")).toBe(origin);
+
+    const unauthenticatedModels = await server.handle(
+      new Request("http://127.0.0.1/models", {
+        headers: {
+          "x-bridge-token": pairing.token,
+          origin
+        }
+      })
+    );
+
+    expect(unauthenticatedModels.status).toBe(401);
 
     const unauthenticatedStream = await server.handle(
       new Request("http://127.0.0.1/chat/stream", {
@@ -412,10 +426,7 @@ describe("createBridgeServer", () => {
     await throwingServer.handle(
       new Request("http://127.0.0.1/auth/connect", {
         body: JSON.stringify({
-          accessToken: "secret",
-          accountLabel: "dhruv2mars",
-          expiresAt: "2026-03-14T10:00:00.000Z",
-          refreshToken: "refresh"
+          token: "ghp_1234567890"
         }),
         headers: {
           "content-type": "application/json"
@@ -444,6 +455,15 @@ describe("createBridgeServer", () => {
 
     const brokenServer = createBridgeServer({
       auth: new AuthSessionManager({
+        provider: {
+          async connect(input) {
+            return {
+              accountLabel: "dhruv2mars",
+              token: input.token,
+              tokenHint: "ghp_...7890"
+            };
+          }
+        },
         store: new MemoryStore()
       }),
       bridgeVersion: "1.0.0",
@@ -462,6 +482,17 @@ describe("createBridgeServer", () => {
     });
 
     const brokenPairing = await pair(brokenServer);
+    await brokenServer.handle(
+      new Request("http://127.0.0.1/auth/connect", {
+        body: JSON.stringify({
+          token: "ghp_1234567890"
+        }),
+        headers: {
+          "content-type": "application/json"
+        },
+        method: "POST"
+      })
+    );
     const brokenModels = await brokenServer.handle(
       new Request("http://127.0.0.1/models", {
         headers: {

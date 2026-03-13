@@ -30,17 +30,17 @@ export interface PairConfirmResponse {
 }
 
 export interface AuthConnectRequest {
-  accessToken: string;
-  accountLabel: string;
-  expiresAt: string;
-  refreshToken: string;
+  organization?: string;
+  token: string;
 }
 
 export interface AuthSessionResponse {
   accountLabel: string | null;
   authenticated: boolean;
   expiresAt?: string;
-  provider: "github-copilot";
+  organization?: string;
+  provider: "github-models";
+  tokenHint?: string;
 }
 
 export interface ListedModel {

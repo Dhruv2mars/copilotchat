@@ -1,5 +1,7 @@
+import type { AuthConnectRequest } from "@copilotchat/shared";
+
 const SESSION_KEY = "copilot_session";
-const PROVIDER = "github-copilot";
+const PROVIDER = "github-models";
 
 export interface SecureStore {
   get(key: string): Promise<string | null>;
@@ -8,29 +10,42 @@ export interface SecureStore {
 }
 
 export interface StoredSession {
-  accessToken: string;
   accountLabel: string;
-  expiresAt: string;
-  refreshToken: string;
+  expiresAt?: string;
+  organization?: string;
+  token: string;
+  tokenHint: string;
+}
+
+export interface AuthProvider {
+  connect(input: AuthConnectRequest): Promise<StoredSession>;
 }
 
 export interface SessionView {
   accountLabel: string | null;
   authenticated: boolean;
   expiresAt?: string;
+  organization?: string;
   provider: typeof PROVIDER;
+  tokenHint?: string;
 }
 
 export class AuthSessionManager {
-  constructor(private readonly options: { store: SecureStore }) {}
+  constructor(
+    private readonly options: {
+      provider: AuthProvider;
+      store: SecureStore;
+    }
+  ) {}
 
-  async connect(session: StoredSession) {
+  async connect(input: AuthConnectRequest) {
+    const session = await this.options.provider.connect(input);
     await this.options.store.set(SESSION_KEY, JSON.stringify(session));
   }
 
   async getSession(): Promise<SessionView> {
-    const raw = await this.options.store.get(SESSION_KEY);
-    if (!raw) {
+    const session = await this.getStoredSession();
+    if (!session) {
       return {
         accountLabel: null,
         authenticated: false,
@@ -38,13 +53,23 @@ export class AuthSessionManager {
       };
     }
 
-    const session = JSON.parse(raw) as StoredSession;
     return {
       accountLabel: session.accountLabel,
       authenticated: true,
       expiresAt: session.expiresAt,
-      provider: PROVIDER
+      organization: session.organization,
+      provider: PROVIDER,
+      tokenHint: session.tokenHint
     };
+  }
+
+  async getStoredSession(): Promise<StoredSession | null> {
+    const raw = await this.options.store.get(SESSION_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    return JSON.parse(raw) as StoredSession;
   }
 
   async logout() {

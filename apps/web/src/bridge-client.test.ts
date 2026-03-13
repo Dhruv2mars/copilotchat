@@ -12,7 +12,7 @@ describe("bridge-client", () => {
             auth: {
               accountLabel: null,
               authenticated: false,
-              provider: "github-copilot"
+              provider: "github-models"
             },
             bridgeVersion: "1.0.0",
             protocolVersion: "2026-03-13",
@@ -97,10 +97,10 @@ describe("bridge-client", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            accountLabel: "Local Copilot",
+            accountLabel: "dhruv2mars",
             authenticated: true,
-            expiresAt: "2026-03-14T10:00:00.000Z",
-            provider: "github-copilot"
+            provider: "github-models",
+            tokenHint: "ghp_...7890"
           })
         )
       )
@@ -109,7 +109,7 @@ describe("bridge-client", () => {
           JSON.stringify({
             accountLabel: null,
             authenticated: false,
-            provider: "github-copilot"
+            provider: "github-models"
           })
         )
       )
@@ -137,7 +137,12 @@ describe("bridge-client", () => {
       pairedAt: "now",
       token: "pair-token"
     });
-    await expect(client.connectAuth()).resolves.toMatchObject({
+    await expect(
+      client.connectAuth({
+        organization: "acme",
+        token: "ghp_1234567890"
+      })
+    ).resolves.toMatchObject({
       authenticated: true
     });
     await expect(client.logout()).resolves.toMatchObject({
