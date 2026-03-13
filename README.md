@@ -6,18 +6,18 @@ Hybrid app:
 
 ## env
 
-Real GitHub auth needs a device-flow app client id.
+Real GitHub auth uses the bundled product client id by default.
 
-Copy `.env.example` values into your shell or launch config:
+Copy `.env.example` values into your shell or launch config if you need to override defaults:
 
 ```bash
 export ALLOWED_ORIGIN=http://localhost:5173
-export GITHUB_DEVICE_CLIENT_ID=your_github_device_app_client_id
 export GITHUB_DEVICE_SCOPE=read:user
 ```
 
 Notes:
-- `GITHUB_DEVICE_CLIENT_ID` can come from a GitHub OAuth app or GitHub App with device flow enabled
+- bundled default client id is the product GitHub App
+- `GITHUB_DEVICE_CLIENT_ID` is optional override
 - bridge stores the resulting user token in OS keychain on macOS
 - browser never stores GitHub auth secret
 
