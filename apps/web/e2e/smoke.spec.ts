@@ -8,10 +8,9 @@ test("pair, connect, chat", async ({ page, request }) => {
   await expect(page.getByRole("heading", { name: "Pair your local bridge" })).toBeVisible();
 
   await page.getByRole("button", { name: "Pair bridge" }).click();
-  await expect(page.getByRole("heading", { name: "Connect GitHub Models" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connect with GitHub" })).toBeVisible();
 
-  await page.getByLabel("GitHub token").fill("ghp_fake_token");
-  await page.getByRole("button", { name: "Connect GitHub" }).click();
+  await page.getByRole("button", { name: "Connect with GitHub" }).click();
   await expect(page.getByRole("heading", { name: "fake-user" })).toBeVisible();
 
   await page.getByLabel("Model").selectOption("gpt-4.5");

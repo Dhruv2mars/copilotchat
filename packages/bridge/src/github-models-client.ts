@@ -1,4 +1,4 @@
-import type { AuthConnectRequest, ChatMessage, ChatStreamRequest } from "@copilotchat/shared";
+import type { ChatMessage, ChatStreamRequest } from "@copilotchat/shared";
 
 import type { StoredSession } from "./auth-session-manager";
 import { normalizeUpstreamEvent } from "./stream-normalizer";
@@ -40,7 +40,7 @@ export class GitHubModelsClient {
     this.modelsBaseUrl = options?.modelsBaseUrl ?? "https://models.github.ai";
   }
 
-  async connect(input: AuthConnectRequest): Promise<StoredSession> {
+  async connect(input: { organization?: string; token: string }): Promise<StoredSession> {
     const token = input.token.trim();
     const organization = normalizeOrganization(input.organization);
 

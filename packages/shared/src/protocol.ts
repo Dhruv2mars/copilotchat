@@ -29,9 +29,22 @@ export interface PairConfirmResponse {
   token: string;
 }
 
-export interface AuthConnectRequest {
+export interface AuthDeviceStartRequest {
   organization?: string;
-  token: string;
+  openInBrowser?: boolean;
+}
+
+export interface AuthDeviceStartResponse {
+  deviceCode: string;
+  expiresAt: string;
+  intervalSeconds: number;
+  organization?: string;
+  userCode: string;
+  verificationUri: string;
+}
+
+export interface AuthDevicePollRequest {
+  deviceCode: string;
 }
 
 export interface AuthSessionResponse {
@@ -41,6 +54,11 @@ export interface AuthSessionResponse {
   organization?: string;
   provider: "github-models";
   tokenHint?: string;
+}
+
+export interface AuthDevicePollResponse extends AuthSessionResponse {
+  pollAfterSeconds?: number;
+  status: "complete" | "pending";
 }
 
 export interface ListedModel {

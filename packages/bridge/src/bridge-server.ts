@@ -1,6 +1,7 @@
 import {
   BRIDGE_PROTOCOL_VERSION,
-  type AuthConnectRequest,
+  type AuthDevicePollRequest,
+  type AuthDeviceStartRequest,
   type BridgeStreamEvent,
   type ChatStreamRequest,
   type PairConfirmRequest,
@@ -68,10 +69,22 @@ export function createBridgeServer(options: {
           return json(await options.auth.getSession(), origin);
         }
 
-        if (request.method === "POST" && url.pathname === "/auth/connect") {
-          const body = await readJson<AuthConnectRequest>(request);
-          await options.auth.connect(body);
-          return json(await options.auth.getSession(), origin);
+        if (request.method === "POST" && url.pathname === "/auth/device/start") {
+          if (!isPaired(request, options.pairing)) {
+            return error("pairing_required", 401, origin);
+          }
+
+          const body = await readJson<AuthDeviceStartRequest>(request);
+          return json(await options.auth.startDeviceAuthorization(body), origin);
+        }
+
+        if (request.method === "POST" && url.pathname === "/auth/device/poll") {
+          if (!isPaired(request, options.pairing)) {
+            return error("pairing_required", 401, origin);
+          }
+
+          const body = await readJson<AuthDevicePollRequest>(request);
+          return json(await options.auth.pollDeviceAuthorization(body), origin);
         }
 
         if (request.method === "POST" && url.pathname === "/auth/logout") {

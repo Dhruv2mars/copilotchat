@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { BridgeStreamEvent, ChatStreamRequest } from "@copilotchat/shared";
 
@@ -65,20 +65,38 @@ describe("createBridgeServer", () => {
   };
 
   function buildServer(gateway: ChatGateway = new FakeGateway()) {
+    const provider = {
+      pollDeviceAuthorization: vi
+        .fn()
+        .mockResolvedValueOnce({
+          intervalSeconds: 5,
+          status: "pending" as const
+        })
+        .mockResolvedValue({
+          session: {
+            accountLabel: "dhruv2mars",
+            organization: "acme",
+            token: "ghu_1234567890",
+            tokenHint: "ghu_...7890"
+          },
+          status: "complete" as const
+        }),
+      startDeviceAuthorization: vi.fn().mockResolvedValue({
+        deviceCode: "device-1",
+        expiresAt: "2026-03-13T10:10:00.000Z",
+        intervalSeconds: 5,
+        organization: "acme",
+        userCode: "ABCD-EFGH",
+        verificationUri: "https://github.com/login/device"
+      })
+    };
+
     return {
       gateway,
+      provider,
       server: createBridgeServer({
         auth: new AuthSessionManager({
-          provider: {
-            async connect(input) {
-              return {
-                accountLabel: "dhruv2mars",
-                organization: input.organization,
-                token: input.token,
-                tokenHint: "ghp_...7890"
-              };
-            }
-          },
+          provider,
           store: new MemoryStore()
         }),
         bridgeVersion: "1.0.0",
@@ -89,9 +107,9 @@ describe("createBridgeServer", () => {
           source: {
             fetchModels: async () => [
               {
+                capabilities: ["chat"],
                 id: "gpt-4.1",
                 label: "GPT-4.1",
-                capabilities: ["chat"],
                 status: "available"
               }
             ]
@@ -140,8 +158,9 @@ describe("createBridgeServer", () => {
     return confirm.json() as Promise<{ token: string }>;
   }
 
-  it("serves health plus auth connect/logout lifecycle", async () => {
-    const { server } = buildServer();
+  it("serves health plus device auth lifecycle", async () => {
+    const { provider, server } = buildServer();
+    const pairing = await pair(server);
 
     await expect(
       server.handle(new Request("http://127.0.0.1/health")).then((response) => response.json())
@@ -153,20 +172,71 @@ describe("createBridgeServer", () => {
       status: "ok"
     });
 
-    const connect = await server.handle(
-      new Request("http://127.0.0.1/auth/connect", {
+    const start = await server.handle(
+      new Request("http://127.0.0.1/auth/device/start", {
         body: JSON.stringify({
-          organization: "acme",
-          token: "ghp_1234567890"
+          organization: "acme"
         }),
         headers: {
-          "content-type": "application/json"
+          "content-type": "application/json",
+          "x-bridge-token": pairing.token,
+          origin
         },
         method: "POST"
       })
     );
 
-    expect(connect.status).toBe(200);
+    expect(start.status).toBe(200);
+    await expect(start.json()).resolves.toMatchObject({
+      deviceCode: "device-1"
+    });
+
+    const pending = await server.handle(
+      new Request("http://127.0.0.1/auth/device/poll", {
+        body: JSON.stringify({
+          deviceCode: "device-1"
+        }),
+        headers: {
+          "content-type": "application/json",
+          "x-bridge-token": pairing.token,
+          origin
+        },
+        method: "POST"
+      })
+    );
+
+    await expect(pending.json()).resolves.toEqual({
+      accountLabel: null,
+      authenticated: false,
+      organization: "acme",
+      pollAfterSeconds: 5,
+      provider: "github-models",
+      status: "pending"
+    });
+
+    const complete = await server.handle(
+      new Request("http://127.0.0.1/auth/device/poll", {
+        body: JSON.stringify({
+          deviceCode: "device-1"
+        }),
+        headers: {
+          "content-type": "application/json",
+          "x-bridge-token": pairing.token,
+          origin
+        },
+        method: "POST"
+      })
+    );
+
+    await expect(complete.json()).resolves.toEqual({
+      accountLabel: "dhruv2mars",
+      authenticated: true,
+      organization: "acme",
+      provider: "github-models",
+      status: "complete",
+      tokenHint: "ghu_...7890"
+    });
+
     await expect(
       server.handle(new Request("http://127.0.0.1/auth/session")).then((response) => response.json())
     ).resolves.toEqual({
@@ -174,7 +244,10 @@ describe("createBridgeServer", () => {
       authenticated: true,
       organization: "acme",
       provider: "github-models",
-      tokenHint: "ghp_...7890"
+      tokenHint: "ghu_...7890"
+    });
+    expect(provider.startDeviceAuthorization).toHaveBeenCalledWith({
+      organization: "acme"
     });
 
     const logout = await server.handle(
@@ -184,17 +257,86 @@ describe("createBridgeServer", () => {
     );
 
     expect(logout.status).toBe(200);
-    await expect(
-      server.handle(new Request("http://127.0.0.1/auth/session")).then((response) => response.json())
-    ).resolves.toEqual({
-      accountLabel: null,
-      authenticated: false,
-      provider: "github-models"
-    });
   });
 
-  it("requires pairing for protected endpoints and streams chat over sse once paired", async () => {
+  it("requires pairing for protected auth/model/chat routes and streams chat once authed", async () => {
     const { server } = buildServer();
+
+    const unauthorizedAuthStart = await server.handle(
+      new Request("http://127.0.0.1/auth/device/start", {
+        body: JSON.stringify({}),
+        headers: {
+          "content-type": "application/json",
+          origin
+        },
+        method: "POST"
+      })
+    );
+
+    expect(unauthorizedAuthStart.status).toBe(401);
+
+    const unpairedStream = await server.handle(
+      new Request("http://127.0.0.1/chat/stream", {
+        body: JSON.stringify({
+          messages: [],
+          modelId: "gpt-4.1",
+          requestId: "req-unpaired"
+        }),
+        headers: {
+          "content-type": "application/json",
+          origin
+        },
+        method: "POST"
+      })
+    );
+
+    expect(unpairedStream.status).toBe(401);
+
+    const unpairedAbort = await server.handle(
+      new Request("http://127.0.0.1/chat/abort", {
+        body: JSON.stringify({
+          requestId: "req-x"
+        }),
+        headers: {
+          "content-type": "application/json",
+          origin
+        },
+        method: "POST"
+      })
+    );
+
+    expect(unpairedAbort.status).toBe(401);
+
+    const pairing = await pair(server);
+
+    const unauthenticatedModels = await server.handle(
+      new Request("http://127.0.0.1/models", {
+        headers: {
+          "x-bridge-token": pairing.token,
+          origin
+        }
+      })
+    );
+
+    expect(unauthenticatedModels.status).toBe(401);
+
+    const unauthenticatedStream = await server.handle(
+      new Request("http://127.0.0.1/chat/stream", {
+        body: JSON.stringify({
+          messages: [],
+          modelId: "gpt-4.1",
+          requestId: "req-0"
+        }),
+        headers: {
+          "content-type": "application/json",
+          "x-bridge-token": pairing.token,
+          origin
+        },
+        method: "POST"
+      })
+    );
+
+    expect(unauthenticatedStream.status).toBe(401);
 
     const unauthorizedModels = await server.handle(
       new Request("http://127.0.0.1/models", {
@@ -206,15 +348,41 @@ describe("createBridgeServer", () => {
 
     expect(unauthorizedModels.status).toBe(401);
 
-    const pairing = await pair(server);
-
     await server.handle(
-      new Request("http://127.0.0.1/auth/connect", {
+      new Request("http://127.0.0.1/auth/device/start", {
         body: JSON.stringify({
-          token: "ghp_1234567890"
+          organization: "acme"
         }),
         headers: {
-          "content-type": "application/json"
+          "content-type": "application/json",
+          "x-bridge-token": pairing.token,
+          origin
+        },
+        method: "POST"
+      })
+    );
+    await server.handle(
+      new Request("http://127.0.0.1/auth/device/poll", {
+        body: JSON.stringify({
+          deviceCode: "device-1"
+        }),
+        headers: {
+          "content-type": "application/json",
+          "x-bridge-token": pairing.token,
+          origin
+        },
+        method: "POST"
+      })
+    );
+    await server.handle(
+      new Request("http://127.0.0.1/auth/device/poll", {
+        body: JSON.stringify({
+          deviceCode: "device-1"
+        }),
+        headers: {
+          "content-type": "application/json",
+          "x-bridge-token": pairing.token,
+          origin
         },
         method: "POST"
       })
@@ -262,18 +430,44 @@ describe("createBridgeServer", () => {
     await expect(stream.text()).resolves.toContain('"type":"assistant_done"');
   });
 
-  it("aborts active requests and rejects malformed routes", async () => {
+  it("aborts active requests and covers defensive branches", async () => {
     const gateway = new FakeGateway();
     const { server } = buildServer(gateway);
     const pairing = await pair(server);
 
     await server.handle(
-      new Request("http://127.0.0.1/auth/connect", {
+      new Request("http://127.0.0.1/auth/device/start", {
+        body: JSON.stringify({}),
+        headers: {
+          "content-type": "application/json",
+          "x-bridge-token": pairing.token,
+          origin
+        },
+        method: "POST"
+      })
+    );
+    await server.handle(
+      new Request("http://127.0.0.1/auth/device/poll", {
         body: JSON.stringify({
-          token: "ghp_1234567890"
+          deviceCode: "device-1"
         }),
         headers: {
-          "content-type": "application/json"
+          "content-type": "application/json",
+          "x-bridge-token": pairing.token,
+          origin
+        },
+        method: "POST"
+      })
+    );
+    await server.handle(
+      new Request("http://127.0.0.1/auth/device/poll", {
+        body: JSON.stringify({
+          deviceCode: "device-1"
+        }),
+        headers: {
+          "content-type": "application/json",
+          "x-bridge-token": pairing.token,
+          origin
         },
         method: "POST"
       })
@@ -321,14 +515,6 @@ describe("createBridgeServer", () => {
     expect(abort.status).toBe(202);
     expect(await textPromise).toContain("assistant_error");
 
-    const notFound = await server.handle(new Request("http://127.0.0.1/nope"));
-    expect(notFound.status).toBe(404);
-  });
-
-  it("covers preflight and defensive error branches", async () => {
-    const { server } = buildServer();
-    const pairing = await pair(server);
-
     const optionsResponse = await server.handle(
       new Request("http://127.0.0.1/models", {
         headers: {
@@ -340,44 +526,10 @@ describe("createBridgeServer", () => {
 
     expect(optionsResponse.headers.get("access-control-allow-origin")).toBe(origin);
 
-    const unauthenticatedModels = await server.handle(
-      new Request("http://127.0.0.1/models", {
-        headers: {
-          "x-bridge-token": pairing.token,
-          origin
-        }
-      })
-    );
-
-    expect(unauthenticatedModels.status).toBe(401);
-
-    const unauthenticatedStream = await server.handle(
-      new Request("http://127.0.0.1/chat/stream", {
+    const unpairedPoll = await server.handle(
+      new Request("http://127.0.0.1/auth/device/poll", {
         body: JSON.stringify({
-          messages: [],
-          modelId: "gpt-4.1",
-          requestId: "req-3"
-        }),
-        headers: {
-          "content-type": "application/json",
-          "x-bridge-token": pairing.token,
-          origin
-        },
-        method: "POST"
-      })
-    );
-
-    expect(unauthenticatedStream.status).toBe(401);
-    await expect(unauthenticatedStream.json()).resolves.toEqual({
-      error: "auth_required"
-    });
-
-    const unpairedStream = await server.handle(
-      new Request("http://127.0.0.1/chat/stream", {
-        body: JSON.stringify({
-          messages: [],
-          modelId: "gpt-4.1",
-          requestId: "req-x"
+          deviceCode: "device-1"
         }),
         headers: {
           "content-type": "application/json",
@@ -387,21 +539,7 @@ describe("createBridgeServer", () => {
       })
     );
 
-    expect(unpairedStream.status).toBe(401);
-
-    const unpairedAbort = await server.handle(
-      new Request("http://127.0.0.1/chat/abort", {
-        body: JSON.stringify({
-          requestId: "req-4"
-        }),
-        headers: {
-          "content-type": "application/json"
-        },
-        method: "POST"
-      })
-    );
-
-    expect(unpairedAbort.status).toBe(401);
+    expect(unpairedPoll.status).toBe(401);
 
     const malformedJson = await server.handle(
       new Request("http://127.0.0.1/pair/start", {
@@ -416,20 +554,48 @@ describe("createBridgeServer", () => {
 
     expect(malformedJson.status).toBe(400);
 
+    const notFound = await server.handle(new Request("http://127.0.0.1/nope"));
+    expect(notFound.status).toBe(404);
+
     const { server: throwingServer } = buildServer({
       async *streamChat() {
         throw new Error("boom");
       }
     });
-
     const throwingPairing = await pair(throwingServer);
     await throwingServer.handle(
-      new Request("http://127.0.0.1/auth/connect", {
+      new Request("http://127.0.0.1/auth/device/start", {
+        body: JSON.stringify({}),
+        headers: {
+          "content-type": "application/json",
+          "x-bridge-token": throwingPairing.token,
+          origin
+        },
+        method: "POST"
+      })
+    );
+    await throwingServer.handle(
+      new Request("http://127.0.0.1/auth/device/poll", {
         body: JSON.stringify({
-          token: "ghp_1234567890"
+          deviceCode: "device-1"
         }),
         headers: {
-          "content-type": "application/json"
+          "content-type": "application/json",
+          "x-bridge-token": throwingPairing.token,
+          origin
+        },
+        method: "POST"
+      })
+    );
+    await throwingServer.handle(
+      new Request("http://127.0.0.1/auth/device/poll", {
+        body: JSON.stringify({
+          deviceCode: "device-1"
+        }),
+        headers: {
+          "content-type": "application/json",
+          "x-bridge-token": throwingPairing.token,
+          origin
         },
         method: "POST"
       })
@@ -456,11 +622,23 @@ describe("createBridgeServer", () => {
     const brokenServer = createBridgeServer({
       auth: new AuthSessionManager({
         provider: {
-          async connect(input) {
+          async pollDeviceAuthorization() {
             return {
-              accountLabel: "dhruv2mars",
-              token: input.token,
-              tokenHint: "ghp_...7890"
+              session: {
+                accountLabel: "dhruv2mars",
+                token: "ghu_1234567890",
+                tokenHint: "ghu_...7890"
+              },
+              status: "complete"
+            };
+          },
+          async startDeviceAuthorization() {
+            return {
+              deviceCode: "device-1",
+              expiresAt: "2026-03-13T10:10:00.000Z",
+              intervalSeconds: 5,
+              userCode: "ABCD-EFGH",
+              verificationUri: "https://github.com/login/device"
             };
           }
         },
@@ -483,12 +661,25 @@ describe("createBridgeServer", () => {
 
     const brokenPairing = await pair(brokenServer);
     await brokenServer.handle(
-      new Request("http://127.0.0.1/auth/connect", {
+      new Request("http://127.0.0.1/auth/device/start", {
+        body: JSON.stringify({}),
+        headers: {
+          "content-type": "application/json",
+          "x-bridge-token": brokenPairing.token,
+          origin
+        },
+        method: "POST"
+      })
+    );
+    await brokenServer.handle(
+      new Request("http://127.0.0.1/auth/device/poll", {
         body: JSON.stringify({
-          token: "ghp_1234567890"
+          deviceCode: "device-1"
         }),
         headers: {
-          "content-type": "application/json"
+          "content-type": "application/json",
+          "x-bridge-token": brokenPairing.token,
+          origin
         },
         method: "POST"
       })
