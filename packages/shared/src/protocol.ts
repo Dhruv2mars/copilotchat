@@ -10,6 +10,7 @@ export interface BridgeHealth {
 export interface BridgeState {
   bridgeVersion?: string;
   paired: boolean;
+  permission?: "denied" | "granted" | "prompt" | "unsupported";
   protocolVersion?: string;
   reachable: boolean;
 }

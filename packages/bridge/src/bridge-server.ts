@@ -38,7 +38,7 @@ export function createBridgeServer(options: {
 
       if (request.method === "OPTIONS") {
         return new Response(null, {
-          headers: corsHeaders(origin)
+          headers: corsHeaders(origin, request)
         });
       }
 
@@ -140,7 +140,7 @@ export function createBridgeServer(options: {
 
           return new Response(stream, {
             headers: {
-              ...corsHeaders(origin),
+              ...corsHeaders(origin, request),
               "cache-control": "no-cache",
               connection: "keep-alive",
               "content-type": "text/event-stream"
@@ -189,11 +189,16 @@ function isPaired(request: Request, pairing: PairingService) {
   });
 }
 
-function corsHeaders(origin: string | null) {
+function corsHeaders(origin: string | null, request?: Request) {
   return {
     "access-control-allow-headers": "content-type, x-bridge-token",
     "access-control-allow-methods": "GET, POST, OPTIONS",
-    "access-control-allow-origin": origin ?? "*"
+    "access-control-allow-origin": origin ?? "*",
+    ...(request?.headers.get("access-control-request-private-network") === "true"
+      ? {
+          "access-control-allow-private-network": "true"
+        }
+      : {})
   };
 }
 

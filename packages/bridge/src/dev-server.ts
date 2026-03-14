@@ -4,6 +4,7 @@ import { AuthSessionManager, type AuthProvider, type SecureStore } from "./auth-
 import { createBridgeServer } from "./bridge-server";
 import { GitHubDeviceFlowClient } from "./github-device-flow-client";
 import { GitHubCopilotClient } from "./github-copilot-client";
+import { resolveAllowedOrigins } from "./bridge-config";
 import { MacOsKeychainStore } from "./macos-keychain-store";
 import { ModelRegistry } from "./model-registry";
 import { PairingService } from "./pairing-service";
@@ -25,7 +26,7 @@ class MemoryStore implements SecureStore {
 }
 
 const port = Number(process.env.BRIDGE_PORT ?? "8787");
-const allowedOrigin = process.env.ALLOWED_ORIGIN ?? "http://localhost:5173";
+const allowedOrigins = resolveAllowedOrigins();
 const defaultGitHubDeviceClientId = "Iv1.b507a08c87ecfe98";
 const copilotClient = new GitHubCopilotClient();
 const auth = new AuthSessionManager({
@@ -72,7 +73,7 @@ const server = createBridgeServer({
     }
   }),
   pairing: new PairingService({
-    allowedOrigins: [allowedOrigin],
+    allowedOrigins,
     challengeTtlMs: 60_000,
     clock: {
       now: () => new Date()
@@ -90,7 +91,7 @@ Bun.serve({
 });
 
 console.log(`bridge listening on http://127.0.0.1:${port}`);
-console.log(`allowed origin: ${allowedOrigin}`);
+console.log(`allowed origins: ${allowedOrigins.join(", ")}`);
 console.log("bridge mode: live github-copilot");
 
 function createAuthProvider(): AuthProvider {

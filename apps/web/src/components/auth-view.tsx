@@ -5,13 +5,79 @@ import type { AuthDeviceStartResponse } from "@copilotchat/shared";
 import { Button } from "./ui/button";
 
 export function AuthView(props: {
+  bridgePermission?: "denied" | "granted" | "prompt" | "unsupported";
   bridgeReachable: boolean;
   deviceAuth: AuthDeviceStartResponse | null;
   isConnecting: boolean;
+  isGrantingBridgeAccess: boolean;
+  requestBridgeAccess(): Promise<void>;
   startDeviceAuth(): Promise<void>;
   statusNote: string;
 }) {
   if (!props.bridgeReachable) {
+    if (props.bridgePermission === "prompt") {
+      return (
+        <div className="flex h-full items-center justify-center px-6">
+          <div className="w-full max-w-md space-y-8">
+            <div className="space-y-2 text-center">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-muted">
+                <LaptopMinimal className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h2 className="text-2xl font-semibold tracking-tight">Allow local bridge access</h2>
+              <p className="text-sm text-muted-foreground">
+                Chrome needs one permission before this hosted app can reach the local bridge.
+              </p>
+            </div>
+
+            <Button className="w-full" onClick={() => void props.requestBridgeAccess()}>
+              {props.isGrantingBridgeAccess ? "Checking bridge access..." : "Allow local bridge access"}
+            </Button>
+
+            <div className="rounded-xl border bg-muted/50 p-4 space-y-2">
+              <h3 className="text-sm font-medium">What happens next</h3>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Click the button, then allow the browser prompt for local network or loopback access.
+              </p>
+            </div>
+
+            {props.statusNote ? (
+              <p className="text-sm text-center text-amber-600 dark:text-amber-400 font-medium">
+                {props.statusNote}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
+
+    if (props.bridgePermission === "denied") {
+      return (
+        <div className="flex h-full items-center justify-center px-6">
+          <div className="w-full max-w-md space-y-8">
+            <div className="space-y-2 text-center">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-muted">
+                <LaptopMinimal className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h2 className="text-2xl font-semibold tracking-tight">Bridge access blocked</h2>
+              <p className="text-sm text-muted-foreground">
+                Allow local network access for this site in the browser, then retry.
+              </p>
+            </div>
+
+            <Button className="w-full" onClick={() => void props.requestBridgeAccess()}>
+              Retry bridge access
+            </Button>
+
+            {props.statusNote ? (
+              <p className="text-sm text-center text-amber-600 dark:text-amber-400 font-medium">
+                {props.statusNote}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="flex h-full items-center justify-center px-6">
         <div className="w-full max-w-md space-y-8">

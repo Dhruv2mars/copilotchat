@@ -12,6 +12,16 @@ import type {
 } from "@copilotchat/shared";
 
 type AppFetch = (input: string, init?: RequestInit) => Promise<Response>;
+type BridgePermissionState = "denied" | "granted" | "prompt" | "unsupported";
+type BridgeRequestInit = RequestInit & {
+  targetAddressSpace?: "local";
+};
+type PermissionStatusLike = {
+  state: "denied" | "granted" | "prompt";
+};
+type PermissionsLike = {
+  query(descriptor: PermissionDescriptor): Promise<PermissionStatusLike>;
+};
 type StorageLike = Pick<Storage, "getItem" | "removeItem" | "setItem">;
 
 const PAIRING_TOKEN_STORAGE_KEY = "copilotchat.bridge_pairing_token";
@@ -26,6 +36,7 @@ export interface BridgeClient {
   bootstrap(): Promise<BridgeBootstrapResponse>;
   logout(): Promise<BridgeBootstrapResponse>;
   pollDeviceAuth(input: { deviceCode: string }): Promise<BridgeAuthPollResult>;
+  requestBridgeAccess(): Promise<BridgeBootstrapResponse>;
   startDeviceAuth(): Promise<AuthDeviceStartResponse>;
   streamChat(input: StreamChatInput): Promise<AssistantDoneEvent["usage"]>;
 }
@@ -35,71 +46,20 @@ export type { BridgeAuthPollResult, BridgeBootstrapResponse as BridgeBootstrap }
 export function createBridgeClient(options: {
   baseUrl: string;
   fetchFn?: AppFetch;
+  isSecureContext?: boolean;
   origin?: string;
+  permissions?: PermissionsLike;
   storage?: StorageLike;
 }): BridgeClient {
   const fetchFn = options.fetchFn ?? fetch;
   const origin = options.origin ?? window.location.origin;
+  const permissions = options.permissions ?? globalThis.navigator?.permissions;
+  const secureContext = options.isSecureContext ?? globalThis.isSecureContext;
   const storage = options.storage ?? sessionStorage;
 
   return {
     async bootstrap() {
-      const health = await readHealth(fetchFn, options.baseUrl);
-      if (!health) {
-        clearPairingToken(storage);
-        return offlineBootstrap();
-      }
-
-      let token = await ensurePairing({
-        baseUrl: options.baseUrl,
-        fetchFn,
-        origin,
-        storage
-      }).catch(() => null);
-      let models: ListedModel[] = [];
-
-      if (health.auth.authenticated && token) {
-        try {
-          models = await loadModels({
-            baseUrl: options.baseUrl,
-            fetchFn,
-            storage,
-            token
-          });
-        } catch (errorValue) {
-          if (errorValue instanceof Error && errorValue.message === "pairing_required") {
-            token = await ensurePairing({
-              baseUrl: options.baseUrl,
-              fetchFn,
-              origin,
-              storage
-            }).catch(() => null);
-            /* v8 ignore next 7 -- repair fallback only when pairing reissue also fails */
-            models = token
-              ? await loadModels({
-                  baseUrl: options.baseUrl,
-                  fetchFn,
-                  storage,
-                  token
-                })
-              /* v8 ignore next -- null repaired token leaves models empty */
-              : [];
-          } else {
-            throw errorValue;
-          }
-        }
-      }
-
-      return {
-        auth: health.auth,
-        bridge: {
-          bridgeVersion: health.bridgeVersion,
-          paired: Boolean(token),
-          protocolVersion: health.protocolVersion,
-          reachable: true
-        },
-        models
-      };
+      return loadBootstrap("passive");
     },
 
     async logout() {
@@ -132,6 +92,10 @@ export function createBridgeClient(options: {
         },
         models: []
       };
+    },
+
+    async requestBridgeAccess() {
+      return loadBootstrap("request");
     },
 
     async pollDeviceAuth(input) {
@@ -264,6 +228,83 @@ export function createBridgeClient(options: {
       return usage;
     }
   };
+
+  async function loadBootstrap(mode: "passive" | "request") {
+    const permission = await readBridgePermission({
+      baseUrl: options.baseUrl,
+      origin,
+      permissions,
+      secureContext
+    });
+    if (mode === "passive" && blocksHostedBridgeBoot(permission)) {
+      clearPairingToken(storage);
+      return offlineBootstrap(permission);
+    }
+
+    const health = await readHealth(fetchFn, options.baseUrl);
+    if (!health) {
+      clearPairingToken(storage);
+      return offlineBootstrap(
+        await readBridgePermission({
+          baseUrl: options.baseUrl,
+          origin,
+          permissions,
+          secureContext
+        })
+      );
+    }
+
+    let token = await ensurePairing({
+      baseUrl: options.baseUrl,
+      fetchFn,
+      origin,
+      storage
+    }).catch(() => null);
+    let models: ListedModel[] = [];
+
+    if (health.auth.authenticated && token) {
+      try {
+        models = await loadModels({
+          baseUrl: options.baseUrl,
+          fetchFn,
+          storage,
+          token
+        });
+      } catch (errorValue) {
+        if (errorValue instanceof Error && errorValue.message === "pairing_required") {
+          token = await ensurePairing({
+            baseUrl: options.baseUrl,
+            fetchFn,
+            origin,
+            storage
+          }).catch(() => null);
+          /* v8 ignore next 7 -- repair fallback only when pairing reissue also fails */
+          models = token
+            ? await loadModels({
+                baseUrl: options.baseUrl,
+                fetchFn,
+                storage,
+                token
+              })
+            /* v8 ignore next -- null repaired token leaves models empty */
+            : [];
+        } else {
+          throw errorValue;
+        }
+      }
+    }
+
+    return {
+      auth: health.auth,
+      bridge: {
+        bridgeVersion: health.bridgeVersion,
+        paired: Boolean(token),
+        protocolVersion: health.protocolVersion,
+        reachable: true
+      },
+      models
+    };
+  }
 }
 
 async function ensurePairing(input: {
@@ -353,7 +394,29 @@ async function loadModels(input: {
   }
 }
 
-function offlineBootstrap(): BridgeBootstrapResponse {
+function blocksHostedBridgeBoot(permission: BridgePermissionState) {
+  return permission === "denied" || permission === "prompt";
+}
+
+function hasPermissionQuery(
+  permissions: PermissionsLike | undefined
+): permissions is PermissionsLike {
+  return typeof permissions?.query === "function";
+}
+
+function isLocalHost(hostname: string) {
+  return hostname === "127.0.0.1" || hostname === "::1" || hostname === "localhost";
+}
+
+function isLoopbackTarget(url: string) {
+  return isLocalHost(new URL(url).hostname);
+}
+
+function isPublicHostedOrigin(origin: string) {
+  return !isLocalHost(new URL(origin).hostname);
+}
+
+function offlineBootstrap(permission?: BridgePermissionState): BridgeBootstrapResponse {
   return {
     auth: {
       accountLabel: null,
@@ -362,6 +425,11 @@ function offlineBootstrap(): BridgeBootstrapResponse {
     },
     bridge: {
       paired: false,
+      ...(blocksHostedBridgeBoot(permission ?? "granted")
+        ? {
+            permission
+          }
+        : {}),
       reachable: false
     },
     models: []
@@ -376,8 +444,37 @@ async function readHealth(fetchFn: AppFetch, baseUrl: string) {
   }
 }
 
+async function readBridgePermission(input: {
+  baseUrl: string;
+  origin: string;
+  permissions?: PermissionsLike;
+  secureContext: boolean;
+}): Promise<BridgePermissionState> {
+  if (!input.secureContext || !isLoopbackTarget(input.baseUrl) || !isPublicHostedOrigin(input.origin)) {
+    return "granted";
+  }
+
+  if (!hasPermissionQuery(input.permissions)) {
+    return "unsupported";
+  }
+
+  for (const permissionName of ["loopback-network", "local-network-access"]) {
+    try {
+      const status = await input.permissions.query({
+        name: permissionName
+      } as PermissionDescriptor);
+
+      return status.state;
+    } catch {
+      continue;
+    }
+  }
+
+  return "unsupported";
+}
+
 async function request(fetchFn: AppFetch, url: string, init?: RequestInit) {
-  const response = await fetchFn(url, init);
+  const response = await fetchFn(url, withBridgeAddressSpace(url, init));
   if (!response.ok) {
     throw await readError(response);
   }
@@ -388,6 +485,17 @@ async function request(fetchFn: AppFetch, url: string, init?: RequestInit) {
 async function requestJson<T>(fetchFn: AppFetch, url: string, init?: RequestInit) {
   const response = await request(fetchFn, url, init);
   return (await response.json()) as T;
+}
+
+function withBridgeAddressSpace(url: string, init?: RequestInit) {
+  if (!isLoopbackTarget(url)) {
+    return init;
+  }
+
+  return {
+    ...init,
+    targetAddressSpace: "local"
+  } satisfies BridgeRequestInit;
 }
 
 async function readError(response: Response) {

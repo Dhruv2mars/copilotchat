@@ -260,6 +260,24 @@ describe("createBridgeServer", () => {
     expect(logout.status).toBe(200);
   });
 
+  it("answers private-network preflight for the prod web app", async () => {
+    const { server } = buildServer();
+
+    const response = await server.handle(
+      new Request("http://127.0.0.1/pair/start", {
+        headers: {
+          "access-control-request-private-network": "true",
+          origin
+        },
+        method: "OPTIONS"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBe(origin);
+    expect(response.headers.get("access-control-allow-private-network")).toBe("true");
+  });
+
   it("requires pairing for protected auth/model/chat routes and streams chat once authed", async () => {
     const { server } = buildServer();
 
