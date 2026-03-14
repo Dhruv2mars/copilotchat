@@ -1,8 +1,10 @@
 import type { ChatMessage } from "@copilotchat/shared";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, Search } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 import { ScrollArea } from "./ui/scroll-area";
 import { Textarea } from "./ui/textarea";
 import { MessageBubble } from "./message-bubble";
@@ -23,10 +25,27 @@ export function ChatView(props: {
   statusNote: string;
 }) {
   const messages = props.activeSession?.messages ?? [];
+  const [modelQuery, setModelQuery] = useState("");
+  const selectedModel = props.models.find((model) => model.id === props.selectedModel) ?? null;
+  const normalizedModelQuery = modelQuery.trim().toLowerCase();
+  const filteredModels = useMemo(
+    () =>
+      props.models.filter((model) => {
+        if (!normalizedModelQuery) {
+          return true;
+        }
+
+        return (
+          model.label.toLowerCase().includes(normalizedModelQuery) ||
+          model.id.toLowerCase().includes(normalizedModelQuery)
+        );
+      }),
+    [normalizedModelQuery, props.models]
+  );
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between gap-4 border-b px-6 py-4">
+      <header className="flex flex-col gap-4 border-b px-6 py-4 xl:flex-row xl:items-start xl:justify-between">
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold tracking-tight">{props.accountLabel}</h2>
           <Badge variant="success" className="font-mono text-[10px]">
@@ -34,21 +53,76 @@ export function ChatView(props: {
           </Badge>
         </div>
 
-        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="font-mono text-xs uppercase tracking-wide">Model</span>
-          <select
-            aria-label="Model"
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring"
-            onChange={(event) => props.setSelectedModel(event.target.value)}
-            value={props.selectedModel}
-          >
-            {props.models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="w-full max-w-xl xl:min-w-[24rem]">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className="font-mono text-xs uppercase tracking-[0.24em] text-muted-foreground">Model</span>
+            {selectedModel ? (
+              <span className="truncate text-xs font-medium text-muted-foreground">{selectedModel.label}</span>
+            ) : null}
+          </div>
+
+          <div className="rounded-2xl border border-border/70 bg-card/70 p-2 shadow-sm backdrop-blur">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                aria-label="Search models"
+                className="h-11 rounded-xl border-transparent bg-background/80 pl-9 text-sm font-medium shadow-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0"
+                onChange={(event) => setModelQuery(event.target.value)}
+                placeholder={
+                  selectedModel ? `Search models. Current: ${selectedModel.label}` : "Search models"
+                }
+                value={modelQuery}
+              />
+            </div>
+
+            <ul aria-label="Model results" className="mt-2 grid max-h-48 gap-1 overflow-y-auto">
+              {filteredModels.length > 0 ? (
+                filteredModels.map((model) => {
+                  const isSelected = model.id === props.selectedModel;
+
+                  return (
+                    <li key={model.id}>
+                      <button
+                        className={[
+                          "flex w-full items-start justify-between gap-3 rounded-xl px-3 py-2 text-left transition-colors",
+                          isSelected
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-transparent hover:bg-accent hover:text-accent-foreground"
+                        ].join(" ")}
+                        onClick={() => {
+                          props.setSelectedModel(model.id);
+                          setModelQuery("");
+                        }}
+                        type="button"
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-semibold">{model.label}</span>
+                          <span
+                            className={[
+                              "block truncate text-[11px]",
+                              isSelected ? "text-primary-foreground/80" : "text-muted-foreground"
+                            ].join(" ")}
+                          >
+                            {model.id}
+                          </span>
+                        </span>
+                        {isSelected ? (
+                          <span className="rounded-full border border-primary-foreground/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em]">
+                            Live
+                          </span>
+                        ) : null}
+                      </button>
+                    </li>
+                  );
+                })
+              ) : (
+                <li className="rounded-xl border border-dashed border-border/80 px-3 py-6 text-center text-sm text-muted-foreground">
+                  No models match.
+                </li>
+              )}
+            </ul>
+          </div>
+        </div>
       </header>
 
       <ScrollArea className="flex-1 min-h-0">
