@@ -85,6 +85,9 @@ bun run build
 - Start with failing tests for auth flow, pairing flow, model load, chat streaming, and error states.
 - Prefer CLI-level / integration-like tests around bridge client behavior first.
 - Verify the actual app manually after automated tests pass.
+- Do not use fake mode, mock providers, mock auth, or synthetic end-to-end flows for final verification.
+- End-to-end verification must use real integrations and real provider behavior, same as production.
+- If real verification is blocked by missing credentials, missing external access, rate limits, or another hard constraint, stop and state the blocker explicitly. Do not substitute a fake flow.
 
 ## Code Rules
 
@@ -184,3 +187,4 @@ Manual:
 - send prompt
 - confirm streamed response renders
 - logout and reconnect
+- all of the above must be real, not fake-mode
