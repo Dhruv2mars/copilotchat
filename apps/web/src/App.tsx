@@ -1,25 +1,24 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ChatMessage } from "@copilotchat/shared";
+import type { AuthDeviceStartResponse, ChatMessage } from "@copilotchat/shared";
 import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { useStore } from "zustand";
 
 import type { AppStore } from "./app-store";
 import { createSessionId } from "./app-store";
-import type { BffClient } from "./bff-client";
+import type { BridgeClient } from "./bridge-client";
 
 import { Sidebar } from "./components/sidebar";
 import { ChatView } from "./components/chat-view";
 import { AuthView } from "./components/auth-view";
 import { LoadingView } from "./components/loading-view";
-import { AccessView } from "./components/access-view";
 import { DiagnosticsView } from "./components/diagnostics-view";
 
 import "./styles.css";
 
-type RuntimeState = "loading" | "ready" | "signed_out";
+type RuntimeState = "bridge_offline" | "loading" | "ready" | "signed_out";
 
-export function App(props: { client: BffClient; store: AppStore }) {
+export function App(props: { client: BridgeClient; store: AppStore }) {
   return (
     <BrowserRouter>
       <Shell {...props} />
@@ -27,7 +26,7 @@ export function App(props: { client: BffClient; store: AppStore }) {
   );
 }
 
-function Shell({ client, store }: { client: BffClient; store: AppStore }) {
+function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
   const queryClient = useQueryClient();
   const sessions = useStore(store, (state) => state.sessions);
   const activeSessionId = useStore(store, (state) => state.activeSessionId);
@@ -42,18 +41,21 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
   });
 
   const bootstrap = bootstrapQuery.data ?? null;
-  const isReady = Boolean(bootstrap?.auth.authenticated);
   const models = bootstrap?.models ?? [];
-  const accountLabel = bootstrap?.auth.accountLabel ?? "GitHub Models";
+  const isBridgeReachable = bootstrap?.bridge.reachable ?? false;
+  const isReady = Boolean(bootstrap?.auth.authenticated);
+  const accountLabel = bootstrap?.auth.accountLabel ?? "GitHub Copilot";
   const deferredSearch = useDeferredValue(sessionSearch);
 
+  const [deviceAuth, setDeviceAuth] = useState<AuthDeviceStartResponse | null>(null);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
   const [statusNote, setStatusNote] = useState("");
-  const [isSending, setIsSending] = useState(false);
-  const [personalAccessToken, setPersonalAccessToken] = useState("");
 
   useEffect(() => {
     if (!models.length) {
+      /* v8 ignore next 3 -- defensive reset after model list disappears */
       if (selectedModel) {
         setSelectedModel("");
       }
@@ -83,70 +85,42 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
     [deferredSearch, sessions]
   );
 
-  const runtime: RuntimeState = bootstrapQuery.isPending ? "loading" : isReady ? "ready" : "signed_out";
-  const sidebarSessions = runtime === "ready" ? filteredSessions : [];
-  const sidebarSessionSearch = runtime === "ready" ? sessionSearch : "";
-  const sidebarActiveSessionId = runtime === "ready" ? activeSessionId : null;
+  const runtime: RuntimeState = bootstrapQuery.isPending
+    ? "loading"
+    : !isBridgeReachable
+      ? "bridge_offline"
+      : isReady
+        ? "ready"
+        : "signed_out";
 
-  async function authWithCli() {
-    try {
-      const next = await client.authWithCli();
-      queryClient.setQueryData(["bootstrap"], next);
-      setStatusNote("GitHub CLI session loaded");
-    } catch (errorValue) {
-      setStatusNote(readErrorMessage(errorValue));
-    }
-  }
-
-  async function authWithPat() {
-    try {
-      const next = await client.authWithPat({
-        token: personalAccessToken
-      });
-      queryClient.setQueryData(["bootstrap"], next);
-      setPersonalAccessToken("");
-      setStatusNote("PAT connected");
-    } catch (errorValue) {
-      setStatusNote(readErrorMessage(errorValue));
-    }
-  }
-
-  async function sendMessage() {
-    if (!activeSession || !selectedModel || !activeSession.draft.trim() || isSending) {
-      return;
-    }
-
-    const userMessage: ChatMessage = {
-      content: activeSession.draft,
-      id: createSessionId(),
-      role: "user"
-    };
-
-    store.getState().appendMessage(activeSession.id, userMessage);
-    store.getState().setDraft(activeSession.id, "");
-    setIsSending(true);
-    setStatusNote("Waiting for GitHub Models");
+  async function connectGitHub() {
+    setIsConnecting(true);
 
     try {
-      const requestedModel = selectedModel;
-      const response = await client.completeChat({
-        messages: [...activeSession.messages, userMessage],
-        modelId: selectedModel,
-        requestId: createSessionId()
-      });
-      store.getState().appendMessage(activeSession.id, response.message);
-      if (response.usedModel?.id && response.usedModel.id !== requestedModel) {
-        setSelectedModel(response.usedModel.id);
-        setStatusNote(
-          `Used ${response.usedModel.label} after ${labelForModel(models, requestedModel)} returned no_access. ${response.usage.outputTokens} output tokens.`
-        );
-      } else {
-        setStatusNote(`${response.usage.outputTokens} output tokens`);
+      const challenge = await client.startDeviceAuth();
+      setDeviceAuth(challenge);
+      setStatusNote("Waiting for GitHub Copilot sign-in");
+
+      while (true) {
+        const pollResult = await client.pollDeviceAuth({
+          deviceCode: challenge.deviceCode
+        });
+
+        if (pollResult.status === "pending") {
+          /* v8 ignore next 2 -- polling delay already covered via immediate test loop */
+          await sleep((pollResult.pollAfterSeconds ?? challenge.intervalSeconds) * 1000);
+          continue;
+        }
+
+        queryClient.setQueryData(["bootstrap"], pollResult);
+        setDeviceAuth(null);
+        setStatusNote("GitHub Copilot connected");
+        return;
       }
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
     } finally {
-      setIsSending(false);
+      setIsConnecting(false);
     }
   }
 
@@ -154,6 +128,8 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
     try {
       const next = await client.logout();
       queryClient.setQueryData(["bootstrap"], next);
+      setDeviceAuth(null);
+      setSelectedModel("");
       store.setState({
         activeSessionId: null,
         sessionSearch: "",
@@ -165,20 +141,65 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
     }
   }
 
+  async function sendMessage() {
+    if (!activeSession || !selectedModel || !activeSession.draft.trim() || isSending) {
+      return;
+    }
+
+    const sessionId = activeSession.id;
+    const userMessage: ChatMessage = {
+      content: activeSession.draft,
+      id: createSessionId(),
+      role: "user"
+    };
+
+    store.getState().appendMessage(sessionId, userMessage);
+    store.getState().setDraft(sessionId, "");
+    setIsSending(true);
+    setStatusNote("Streaming response from local bridge");
+
+    const assistantId = createSessionId();
+    let assistantContent = "";
+
+    try {
+      const usage = await client.streamChat({
+        onEvent(event) {
+          if (event.type === "assistant_delta") {
+            assistantContent += event.data;
+            store.getState().upsertMessage(sessionId, {
+              content: assistantContent,
+              id: assistantId,
+              role: "assistant"
+            });
+          }
+        },
+        request: {
+          messages: [...activeSession.messages, userMessage],
+          modelId: selectedModel,
+          requestId: createSessionId()
+        }
+      });
+
+      setStatusNote(`${usage.outputTokens} output tokens`);
+    } catch (errorValue) {
+      setStatusNote(readErrorMessage(errorValue));
+    } finally {
+      setIsSending(false);
+    }
+  }
+
   function renderChatContent() {
     if (runtime === "loading") {
       return <LoadingView />;
     }
 
-    if (runtime === "signed_out") {
+    if (runtime !== "ready") {
       return (
         <AuthView
-          /* v8 ignore next */
-          devCliAvailable={bootstrap?.devCliAvailable ?? false}
-          personalAccessToken={personalAccessToken}
-          setPersonalAccessToken={setPersonalAccessToken}
-          startPatAuth={authWithPat}
-          startLocalCliAuth={authWithCli}
+          bridgeReachable={isBridgeReachable}
+          deviceAuth={deviceAuth}
+          isConnecting={isConnecting}
+          startDeviceAuth={connectGitHub}
           statusNote={statusNote}
         />
       );
@@ -206,12 +227,12 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar
-        accountLabel={accountLabel}
-        activeSessionId={sidebarActiveSessionId}
-        filteredSessions={sidebarSessions}
+        accountLabel={runtime === "ready" ? accountLabel : isBridgeReachable ? "GitHub Copilot" : "Bridge offline"}
+        activeSessionId={runtime === "ready" ? activeSessionId : null}
+        filteredSessions={runtime === "ready" ? filteredSessions : []}
         logout={logout}
         runtime={runtime}
-        sessionSearch={sidebarSessionSearch}
+        sessionSearch={runtime === "ready" ? sessionSearch : ""}
         setSessionSearch={(value) => store.getState().setSessionSearch(value)}
         startNewThread={() => startTransition(() => store.getState().createSession(createSessionId()))}
         statusNote={statusNote}
@@ -222,14 +243,10 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
         <Routes>
           <Route element={renderChatContent()} path="/chat" />
           <Route
-            element={<AccessView devCliAvailable={bootstrap?.devCliAvailable ?? false} />}
-            path="/access"
-          />
-          <Route
             element={
               <DiagnosticsView
                 accountLabel={accountLabel}
-                devCliAvailable={bootstrap?.devCliAvailable ?? false}
+                bridgeState={bootstrap?.bridge ?? { paired: false, reachable: false }}
                 models={models}
                 runtime={runtime}
               />
@@ -252,22 +269,23 @@ function readErrorMessage(errorValue: unknown) {
     return friendlyError(errorValue);
   }
 
-  return "github_bff_request_failed";
-}
-
-function labelForModel(models: Array<{ id: string; label: string }>, modelId: string) {
-  /* v8 ignore next */
-  return models.find((model) => model.id === modelId)?.label ?? modelId;
+  return "bridge_request_failed";
 }
 
 function friendlyError(error: string) {
-  if (error === "github_models_pat_required") {
-    return "PAT lacks GitHub Models access";
+  if (error === "auth_flow_not_found") {
+    return "Bridge auth flow expired. Start sign-in again.";
   }
 
-  if (error === "no_inference_access") {
-    return "This account/token cannot run chat inference on the current included Copilot models.";
+  if (error === "bridge_request_failed") {
+    return "bridge_request_failed";
   }
 
   return error;
+}
+
+function sleep(delayMs: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
 }

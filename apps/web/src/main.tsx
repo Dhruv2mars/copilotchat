@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
 import { createAppStore } from "./app-store";
-import { createHttpBffClient } from "./bff-client";
+import { createBridgeClient } from "./bridge-client";
 import { ThemeProvider } from "./components/theme-provider";
 
 const queryClient = new QueryClient({
@@ -18,8 +18,8 @@ createRoot(document.getElementById("root")!).render(
   <ThemeProvider defaultTheme="dark">
     <QueryClientProvider client={queryClient}>
       <App
-        client={createHttpBffClient({
-          baseUrl: import.meta.env.VITE_API_BASE_URL ?? "/api"
+        client={createBridgeClient({
+          baseUrl: import.meta.env.VITE_BRIDGE_BASE_URL ?? "http://127.0.0.1:8787"
         })}
         store={createAppStore()}
       />

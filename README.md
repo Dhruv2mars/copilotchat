@@ -1,37 +1,61 @@
 # copilotchat
 
-Hybrid app:
-- hosted Vite/React UI
-- local bridge for GitHub auth + inference
+Hosted web chat UI + local bridge for GitHub Copilot auth and inference.
 
-## env
+## Goal
 
-Real GitHub auth uses the bundled product client id by default.
+User opens the web app, connects GitHub Copilot through a local bridge, then chats with available models in a normal streaming chat UI.
 
-Copy `.env.example` values into your shell or launch config if you need to override defaults:
+Provider auth stays local:
+- bridge owns auth
+- bridge stores tokens in secure storage
+- browser never receives raw provider token
+
+## Packages
+
+- `apps/web`: hosted Vite/React app
+- `packages/bridge`: local Bun bridge
+- `packages/shared`: shared protocol types
+
+## Dev
+
+```bash
+bun install
+
+bun run dev
+# or split
+bun run dev:bridge
+bun run dev:web
+```
+
+Default local URLs:
+- web: `http://localhost:5173`
+- bridge: `http://127.0.0.1:8787`
+
+## Env
 
 ```bash
 export ALLOWED_ORIGIN=http://localhost:5173
+export BRIDGE_PORT=8787
 export GITHUB_DEVICE_SCOPE=read:user
 ```
 
 Notes:
-- bundled default client id is the product GitHub App
-- `GITHUB_DEVICE_CLIENT_ID` is optional override
-- bridge stores the resulting user token in OS keychain on macOS
-- browser never stores GitHub auth secret
+- bundled GitHub device client id may be used by default
+- bridge should store auth in OS keychain on supported platforms
 
-## dev
-
-```bash
-bun run --filter @copilotchat/bridge dev
-bun run --filter @copilotchat/web dev
-```
-
-## verify
+## Verify
 
 ```bash
 bun run test
 bun run check
 bun run build
 ```
+
+Manual flow:
+1. start bridge
+2. start web
+3. connect GitHub Copilot
+4. wait for models
+5. send prompt
+6. confirm streamed response

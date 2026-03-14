@@ -10,10 +10,6 @@
       "destination": "/"
     },
     {
-      "source": "/access",
-      "destination": "/"
-    },
-    {
       "source": "/diagnostics",
       "destination": "/"
     }

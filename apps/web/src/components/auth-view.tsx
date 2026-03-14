@@ -1,29 +1,86 @@
-import { KeyRound, Terminal } from "lucide-react";
+import { ExternalLink, LaptopMinimal, Link2 } from "lucide-react";
+
+import type { AuthDeviceStartResponse } from "@copilotchat/shared";
+
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 
 export function AuthView(props: {
-  devCliAvailable: boolean;
-  personalAccessToken: string;
-  setPersonalAccessToken(value: string): void;
-  startPatAuth(): Promise<void>;
-  startLocalCliAuth(): Promise<void>;
+  bridgeReachable: boolean;
+  deviceAuth: AuthDeviceStartResponse | null;
+  isConnecting: boolean;
+  startDeviceAuth(): Promise<void>;
   statusNote: string;
 }) {
-  return (
-    <div className="flex items-center justify-center h-full px-6">
-      <div className="w-full max-w-md space-y-8">
-        <div className="space-y-2 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted mx-auto mb-4">
-            <KeyRound className="h-6 w-6 text-muted-foreground" />
+  if (!props.bridgeReachable) {
+    return (
+      <div className="flex h-full items-center justify-center px-6">
+        <div className="w-full max-w-md space-y-8">
+          <div className="space-y-2 text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-muted">
+              <LaptopMinimal className="h-6 w-6 text-muted-foreground" />
+            </div>
+            <h2 className="text-2xl font-semibold tracking-tight">Bridge offline</h2>
+            <p className="text-sm text-muted-foreground">
+              Start the local bridge on your machine to continue.
+            </p>
           </div>
-          <h2 className="text-2xl font-semibold tracking-tight">
-            Connect a PAT with Models access
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Use a GitHub personal access token with GitHub Models permission. Device-flow tokens do not reliably work here.
-          </p>
+
+          <div className="rounded-xl border bg-muted/50 p-4 space-y-2">
+            <h3 className="text-sm font-medium">Expected local service</h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              The hosted app needs a local bridge for pairing, GitHub Copilot auth, model discovery,
+              and streaming chat.
+            </p>
+          </div>
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full items-center justify-center px-6">
+      <div className="w-full max-w-md space-y-8">
+        {props.deviceAuth ? (
+          <>
+            <div className="space-y-2 text-center">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-muted">
+                <Link2 className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h2 className="text-2xl font-semibold tracking-tight">Finish GitHub Copilot sign-in</h2>
+              <p className="text-sm text-muted-foreground">
+                The bridge opened GitHub device sign-in. Enter this code if the browser page asks for it.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border bg-card px-6 py-5 text-center">
+              <p className="text-xs font-mono uppercase tracking-widest text-muted-foreground">User code</p>
+              <p className="mt-3 text-3xl font-semibold tracking-[0.3em]">{props.deviceAuth.userCode}</p>
+            </div>
+
+            <Button asChild className="w-full">
+              <a href={props.deviceAuth.verificationUri} rel="noreferrer" target="_blank">
+                Open GitHub device page
+                <ExternalLink className="ml-2 h-4 w-4" />
+              </a>
+            </Button>
+          </>
+        ) : (
+          <>
+            <div className="space-y-2 text-center">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-muted">
+                <Link2 className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h2 className="text-2xl font-semibold tracking-tight">Connect GitHub Copilot</h2>
+              <p className="text-sm text-muted-foreground">
+                Sign in through the local bridge. Provider credentials stay on your machine.
+              </p>
+            </div>
+
+            <Button className="w-full" onClick={() => void props.startDeviceAuth()}>
+              {props.isConnecting ? "Connecting..." : "Connect GitHub Copilot"}
+            </Button>
+          </>
+        )}
 
         {props.statusNote ? (
           <p className="text-sm text-center text-amber-600 dark:text-amber-400 font-medium">
@@ -31,42 +88,11 @@ export function AuthView(props: {
           </p>
         ) : null}
 
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="pat-input">
-              Personal access token
-            </label>
-            <Input
-              id="pat-input"
-              aria-label="Personal access token"
-              autoComplete="off"
-              onChange={(event) => props.setPersonalAccessToken(event.target.value)}
-              placeholder="github_pat_..."
-              type="password"
-              value={props.personalAccessToken}
-            />
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Button onClick={() => void props.startPatAuth()}>
-              Connect PAT
-            </Button>
-            {props.devCliAvailable ? (
-              <Button
-                variant="outline"
-                onClick={() => void props.startLocalCliAuth()}
-              >
-                <Terminal className="mr-2 h-4 w-4" />
-                Use local GitHub CLI
-              </Button>
-            ) : null}
-          </div>
-        </div>
-
         <div className="rounded-xl border bg-muted/50 p-4 space-y-2">
-          <h3 className="text-sm font-medium">Required token</h3>
+          <h3 className="text-sm font-medium">Security model</h3>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            GitHub PAT with Models access. The BFF stores it in an encrypted http-only session cookie after validation.
+            Browser pairs with a local bridge. The bridge stores provider auth in secure local storage
+            and performs chat inference without exposing the raw token to the web app.
           </p>
         </div>
       </div>
