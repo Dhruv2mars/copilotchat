@@ -5,7 +5,7 @@ import type {
   AuthDeviceStartResponse
 } from "@copilotchat/shared";
 
-const SESSION_KEY = "copilot_session";
+const SESSION_KEY = "copilot_session_v2";
 const PROVIDER = "github-copilot";
 const REFRESH_SKEW_MS = 60_000;
 

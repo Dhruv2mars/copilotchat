@@ -6,6 +6,8 @@ import {
   type SecureStore
 } from "../src/auth-session-manager";
 
+const SESSION_KEY = "copilot_session_v2";
+
 class MemoryStore implements SecureStore {
   private readonly map = new Map<string, string>();
 
@@ -149,7 +151,7 @@ describe("AuthSessionManager", () => {
       authenticated: false,
       provider: "github-copilot"
     });
-    await expect(store.get("copilot_session")).resolves.toBeNull();
+    await expect(store.get(SESSION_KEY)).resolves.toBeNull();
   });
 
   it("rejects missing or expired device flows and clears bad refreshes", async () => {
@@ -193,7 +195,7 @@ describe("AuthSessionManager", () => {
     ).rejects.toThrow("auth_flow_expired");
 
     await store.set(
-      "copilot_session",
+      SESSION_KEY,
       JSON.stringify({
         accountLabel: "dhruv2mars",
         expiresAt: "2026-03-13T10:00:00.000Z",
@@ -204,13 +206,13 @@ describe("AuthSessionManager", () => {
     );
 
     await expect(manager.getStoredSession()).resolves.toBeNull();
-    await expect(store.get("copilot_session")).resolves.toBeNull();
+    await expect(store.get(SESSION_KEY)).resolves.toBeNull();
   });
 
   it("returns expiring sessions unchanged when provider has no refresh", async () => {
     const store = new MemoryStore();
     await store.set(
-      "copilot_session",
+      SESSION_KEY,
       JSON.stringify({
         accountLabel: "dhruv2mars",
         expiresAt: "2026-03-13T10:00:00.000Z",

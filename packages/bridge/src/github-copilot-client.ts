@@ -5,6 +5,10 @@ import { normalizeUpstreamEvent } from "./stream-normalizer";
 
 type BridgeFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
+const COPILOT_EDITOR_VERSION = "vscode/1.106.0";
+const COPILOT_PLUGIN_VERSION = "copilot-chat/0.30.0";
+const COPILOT_INTEGRATION_ID = "vscode-chat";
+
 interface GitHubUser {
   login: string;
 }
@@ -100,7 +104,7 @@ export class GitHubCopilotClient {
     signal: AbortSignal;
     token: string;
   }) {
-    const response = await this.fetchFn(`${this.copilotBaseUrl}/chat/completions`, {
+    const completionResponse = await this.fetchFn(`${this.copilotBaseUrl}/chat/completions`, {
       body: JSON.stringify({
         messages: input.request.messages.map(toUpstreamMessage),
         model: input.request.modelId,
@@ -117,11 +121,17 @@ export class GitHubCopilotClient {
       signal: input.signal
     });
 
-    if (!response.ok) {
-      throw new Error(await readError(response));
+    if (!completionResponse.ok) {
+      const error = await readError(completionResponse);
+      if (error.code === "unsupported_api_for_model" || error.code === "model_not_supported") {
+        yield* this.streamResponses(input);
+        return;
+      }
+
+      throw new Error(error.message);
     }
 
-    const reader = response.body?.getReader();
+    const reader = completionResponse.body?.getReader();
     if (!reader) {
       throw new Error("stream_missing");
     }
@@ -195,10 +205,93 @@ export class GitHubCopilotClient {
     });
   }
 
+  private async *streamResponses(input: {
+    request: ChatStreamRequest;
+    signal: AbortSignal;
+    token: string;
+  }) {
+    const response = await this.fetchFn(`${this.copilotBaseUrl}/responses`, {
+      body: JSON.stringify({
+        input: input.request.messages.map(toResponsesInputMessage),
+        model: input.request.modelId,
+        stream: true
+      }),
+      headers: {
+        ...copilotHeaders(input.token),
+        "content-type": "application/json"
+      },
+      method: "POST",
+      signal: input.signal
+    });
+
+    if (!response.ok) {
+      const error = await readError(response);
+      throw new Error(error.message);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("stream_missing");
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
+
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+
+      buffer += decoder.decode(chunk.value, {
+        stream: true
+      });
+
+      const parsed = flushFrames(buffer);
+      buffer = parsed.tail;
+
+      for (const payload of parsed.events) {
+        const event = JSON.parse(payload) as {
+          delta?: string;
+          response?: {
+            usage?: {
+              input_tokens?: number;
+              output_tokens?: number;
+            };
+          };
+          type?: string;
+        };
+
+        if (event.type === "response.output_text.delta" && event.delta) {
+          yield normalizeUpstreamEvent({
+            delta: event.delta,
+            type: "delta"
+          });
+        }
+
+        if (event.type === "response.completed") {
+          inputTokens = event.response?.usage?.input_tokens ?? inputTokens;
+          outputTokens = event.response?.usage?.output_tokens ?? outputTokens;
+        }
+      }
+    }
+
+    yield normalizeUpstreamEvent({
+      type: "done",
+      usage: {
+        inputTokens,
+        outputTokens
+      }
+    });
+  }
+
   private async requestJson<T>(url: string, init?: RequestInit) {
     const response = await this.fetchFn(url, init);
     if (!response.ok) {
-      throw new Error(await readError(response));
+      const error = await readError(response);
+      throw new Error(error.message);
     }
 
     return (await response.json()) as T;
@@ -236,9 +329,9 @@ function copilotHeaders(token: string) {
   return {
     accept: "application/json",
     authorization: `Bearer ${token}`,
-    "copilot-integration-id": "vscode-chat",
-    "editor-plugin-version": "copilotchat/1.0",
-    "editor-version": "copilotchat/1.0"
+    "copilot-integration-id": COPILOT_INTEGRATION_ID,
+    "editor-plugin-version": COPILOT_PLUGIN_VERSION,
+    "editor-version": COPILOT_EDITOR_VERSION
   };
 }
 
@@ -286,21 +379,24 @@ async function readError(response: Response) {
   try {
     const payload = (await response.json()) as {
       error?: {
+        code?: string;
         message?: string;
       };
       message?: string;
     };
-    if (payload.error?.message) {
-      return payload.error.message;
-    }
 
-    if (payload.message) {
-      return payload.message;
-    }
-
-    return "github_copilot_request_failed";
+    return {
+      code: payload.error?.code,
+      message:
+        payload.error?.message ??
+        payload.message ??
+        "github_copilot_request_failed"
+    };
   } catch {
-    return "github_copilot_request_failed";
+    return {
+      code: undefined,
+      message: "github_copilot_request_failed"
+    };
   }
 }
 
@@ -319,6 +415,18 @@ function normalizeOrganization(value?: string) {
 function toUpstreamMessage(message: ChatMessage) {
   return {
     content: message.content,
+    role: message.role
+  };
+}
+
+function toResponsesInputMessage(message: ChatMessage) {
+  return {
+    content: [
+      {
+        text: message.content,
+        type: message.role === "assistant" ? "output_text" : "input_text"
+      }
+    ],
     role: message.role
   };
 }
