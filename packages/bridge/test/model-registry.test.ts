@@ -6,7 +6,7 @@ import {
 } from "../src/model-registry";
 
 describe("ModelRegistry", () => {
-  it("filters non-chat or unavailable models and caches results", async () => {
+  it("filters non-chat models, keeps unsupported chat models, and caches results", async () => {
     const source: BridgeModelSource = {
       fetchModels: vi.fn().mockResolvedValue([
         {
@@ -25,7 +25,7 @@ describe("ModelRegistry", () => {
           id: "gpt-4o",
           label: "GPT-4o",
           capabilities: ["chat"],
-          status: "maintenance"
+          status: "unavailable"
         }
       ])
     };
@@ -38,8 +38,14 @@ describe("ModelRegistry", () => {
 
     await expect(registry.list()).resolves.toEqual([
       {
+        availability: "available",
         id: "gpt-4.1",
         label: "GPT-4.1"
+      },
+      {
+        availability: "unsupported",
+        id: "gpt-4o",
+        label: "GPT-4o"
       }
     ]);
 

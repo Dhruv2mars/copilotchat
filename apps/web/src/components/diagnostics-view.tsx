@@ -3,7 +3,7 @@ import type { BridgeState } from "@copilotchat/shared";
 export function DiagnosticsView(props: {
   accountLabel: string;
   bridgeState: BridgeState;
-  models: { id: string; label: string }[];
+  models: { availability: "available" | "unsupported"; id: string; label: string }[];
   runtime: "bridge_offline" | "loading" | "ready" | "signed_out";
 }) {
   const facts = [
@@ -17,7 +17,11 @@ export function DiagnosticsView(props: {
     {
       label: "Models",
       value: props.models.length
-        ? props.models.map((model) => model.label).join(", ")
+        ? props.models
+            .map((model) =>
+              model.availability === "available" ? model.label : `${model.label} (unavailable)`
+            )
+            .join(", ")
         : "none"
     }
   ];

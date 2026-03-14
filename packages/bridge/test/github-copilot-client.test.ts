@@ -139,20 +139,22 @@ describe("GitHubCopilotClient", () => {
       client.listModels({
         token: "ghp_1234567890"
       })
-    ).resolves.toEqual([
-      {
-        capabilities: ["chat"],
-        id: "gpt-4o",
-        label: "GPT-4o",
-        status: "available"
-      },
-      {
-        capabilities: ["chat"],
-        id: "gpt-4o-mini",
-        label: "GPT-4o mini",
-        status: "available"
-      }
-    ]);
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        {
+          capabilities: ["chat"],
+          id: "gpt-4o",
+          label: "GPT-4o",
+          status: "available"
+        },
+        {
+          capabilities: ["chat"],
+          id: "gpt-5",
+          label: "GPT-5",
+          status: "unavailable"
+        }
+      ])
+    );
 
     const events: Array<{ type: string; value?: string }> = [];
     for await (const event of client.streamChat({
@@ -200,6 +202,91 @@ describe("GitHubCopilotClient", () => {
         value: "7/4"
       }
     ]);
+  });
+
+  it("keeps opencode catalog models and marks dead entries unavailable", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              capabilities: {
+                family: "gpt-5.2-codex",
+                type: "chat"
+              },
+              id: "gpt-5.2-codex",
+              model_picker_enabled: true,
+              name: "GPT-5.2-Codex",
+              policy: {
+                state: "enabled"
+              }
+            },
+            {
+              capabilities: {
+                family: "claude-sonnet-4.6",
+                type: "chat"
+              },
+              id: "claude-sonnet-4.6",
+              model_picker_enabled: false,
+              name: "Claude Sonnet 4.6",
+              policy: {
+                state: "enabled"
+              }
+            },
+            {
+              capabilities: {
+                family: "gpt-5.4",
+                type: "chat"
+              },
+              id: "gpt-5.4",
+              model_picker_enabled: false,
+              name: "GPT-5.4",
+              policy: {
+                state: "enabled"
+              }
+            }
+          ]
+        })
+      )
+    );
+
+    const client = new GitHubCopilotClient({
+      fetchFn: fetchMock,
+      copilotBaseUrl: "https://api.githubcopilot.test"
+    });
+
+    await expect(
+      client.listModels({
+        token: "ghp_1234567890"
+      })
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        {
+          capabilities: ["chat"],
+          id: "gpt-5.2-codex",
+          label: "GPT-5.2-Codex",
+          status: "available"
+        },
+        {
+          capabilities: ["chat"],
+          id: "claude-sonnet-4.6",
+          label: "Claude Sonnet 4.6",
+          status: "unavailable"
+        },
+        {
+          capabilities: ["chat"],
+          id: "gpt-5.4",
+          label: "GPT-5.4",
+          status: "unavailable"
+        },
+        {
+          capabilities: ["chat"],
+          id: "gpt-5",
+          label: "GPT-5",
+          status: "unavailable"
+        }
+      ])
+    );
   });
 
   it("falls back to responses api for frontier models and preserves chat history", async () => {
@@ -936,17 +1023,19 @@ describe("GitHubCopilotClient", () => {
       client.listModels({
         token: "ghp_1234567890"
       })
-    ).resolves.toEqual([
-      {
-        capabilities: ["chat"],
-        id: "claude-sonnet-4-2025-02-01",
-        label: "Claude Sonnet 4",
-        status: "available"
-      }
-    ]);
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        {
+          capabilities: ["chat"],
+          id: "claude-sonnet-4-2025-02-01",
+          label: "Claude Sonnet 4",
+          status: "available"
+        }
+      ])
+    );
   });
 
-  it("falls back to model id when family and name are absent", async () => {
+  it("falls back to catalog label when the live model name is absent", async () => {
     const client = new GitHubCopilotClient({
       fetchFn: vi.fn().mockResolvedValue(
         new Response(
@@ -954,10 +1043,10 @@ describe("GitHubCopilotClient", () => {
             data: [
               {
                 capabilities: {
-                  family: " ",
+                  family: "gpt-5.1",
                   type: "chat"
                 },
-                id: "custom-model"
+                id: "gpt-5.1"
               }
             ]
           })
@@ -969,14 +1058,51 @@ describe("GitHubCopilotClient", () => {
       client.listModels({
         token: "ghp_1234567890"
       })
-    ).resolves.toEqual([
-      {
-        capabilities: ["chat"],
-        id: "custom-model",
-        label: "custom-model",
-        status: "available"
-      }
-    ]);
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        {
+          capabilities: ["chat"],
+          id: "gpt-5.1",
+          label: "GPT-5.1",
+          status: "available"
+        }
+      ])
+    );
+  });
+
+  it("falls back to exact catalog id when the live family is absent", async () => {
+    const client = new GitHubCopilotClient({
+      fetchFn: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  type: "chat"
+                },
+                id: "gpt-5.2",
+                name: "GPT-5.2"
+              }
+            ]
+          })
+        )
+      )
+    });
+
+    await expect(
+      client.listModels({
+        token: "ghp_1234567890"
+      })
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        {
+          capabilities: ["chat"],
+          id: "gpt-5.2",
+          label: "GPT-5.2",
+          status: "available"
+        }
+      ])
+    );
   });
 
   it("skips picker-disabled family aliases when selecting models", async () => {
@@ -1013,14 +1139,16 @@ describe("GitHubCopilotClient", () => {
       client.listModels({
         token: "ghp_1234567890"
       })
-    ).resolves.toEqual([
-      {
-        capabilities: ["chat"],
-        id: "claude-sonnet-4.5-2025-02-20",
-        label: "Claude Sonnet 4.5",
-        status: "available"
-      }
-    ]);
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        {
+          capabilities: ["chat"],
+          id: "claude-sonnet-4.5",
+          label: "Claude Sonnet 4.5",
+          status: "available"
+        }
+      ])
+    );
   });
 
   it("retries transient chat stream failures and falls back to non-stream completions", async () => {
@@ -1840,7 +1968,16 @@ describe("GitHubCopilotClient", () => {
       client.listModels({
         token: "ghp_1234567890"
       })
-    ).resolves.toHaveLength(1);
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        {
+          capabilities: ["chat"],
+          id: "gpt-4o",
+          label: "GPT-4o",
+          status: "available"
+        }
+      ])
+    );
 
     globalThis.fetch = originalFetch;
   });

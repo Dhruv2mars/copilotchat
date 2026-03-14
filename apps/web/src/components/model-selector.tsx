@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../lib/utils";
 
 export function ModelSelector(props: {
-  models: { id: string; label: string }[];
+  models: { availability: "available" | "unsupported"; id: string; label: string }[];
   selectedModel: string;
   setSelectedModel(value: string): void;
 }) {
@@ -124,21 +124,32 @@ export function ModelSelector(props: {
               filtered.map((model, index) => {
                 const isSelected = model.id === props.selectedModel;
                 const isHighlighted = index === highlightIndex;
+                const isUnsupported = model.availability === "unsupported";
 
                 return (
                   <button
                     key={model.id}
                     aria-selected={isSelected}
+                    disabled={isUnsupported}
                     className={cn(
                       "flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
                       isHighlighted
                         ? "bg-accent text-accent-foreground"
                         : "text-popover-foreground",
-                      !isHighlighted && "hover:bg-accent/50"
+                      !isHighlighted && !isUnsupported && "hover:bg-accent/50",
+                      isUnsupported && "cursor-not-allowed opacity-50"
                     )}
                     data-model-item
-                    onClick={() => selectModel(model.id)}
-                    onMouseEnter={() => setHighlightIndex(index)}
+                    onClick={() => {
+                      if (!isUnsupported) {
+                        selectModel(model.id);
+                      }
+                    }}
+                    onMouseEnter={() => {
+                      if (!isUnsupported) {
+                        setHighlightIndex(index);
+                      }
+                    }}
                     role="option"
                     type="button"
                   >
@@ -148,7 +159,11 @@ export function ModelSelector(props: {
                         {model.id}
                       </span>
                     </div>
-                    {isSelected ? (
+                    {isUnsupported ? (
+                      <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                        Unavailable
+                      </span>
+                    ) : isSelected ? (
                       <Check className="h-4 w-4 shrink-0 text-primary" />
                     ) : null}
                   </button>

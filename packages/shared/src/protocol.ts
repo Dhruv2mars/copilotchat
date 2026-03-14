@@ -80,6 +80,7 @@ export interface BridgeAuthPollPendingResponse {
 }
 
 export interface ListedModel {
+  availability: "available" | "unsupported";
   id: string;
   label: string;
 }

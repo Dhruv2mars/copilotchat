@@ -10,6 +10,7 @@ export interface BridgeModelSource {
 }
 
 export interface ListedModel {
+  availability: "available" | "unsupported";
   id: string;
   label: string;
 }
@@ -32,9 +33,9 @@ export class ModelRegistry {
     }
 
     const models = (await this.options.source.fetchModels())
-      .filter((model) => model.status === "available")
       .filter((model) => model.capabilities.includes("chat"))
-      .map((model) => ({
+      .map<ListedModel>((model) => ({
+        availability: model.status === "available" ? "available" : "unsupported",
         id: model.id,
         label: model.label
       }));

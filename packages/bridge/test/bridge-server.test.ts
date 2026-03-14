@@ -400,6 +400,7 @@ describe("createBridgeServer", () => {
 
     await expect(models.json()).resolves.toEqual([
       {
+        availability: "available",
         id: "gpt-4.1",
         label: "GPT-4.1"
       }

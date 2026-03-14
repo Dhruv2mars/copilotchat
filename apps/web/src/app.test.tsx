@@ -75,10 +75,17 @@ function createReadyBootstrap(): BridgeBootstrap {
     },
     models: [
       {
+        availability: "unsupported",
+        id: "openai/gpt-5.4",
+        label: "OpenAI GPT-5.4"
+      },
+      {
+        availability: "available",
         id: "openai/gpt-5-mini",
         label: "OpenAI GPT-5 mini"
       },
       {
+        availability: "available",
         id: "openai/gpt-4.1",
         label: "OpenAI GPT-4.1"
       }
@@ -167,6 +174,7 @@ describe("App", () => {
 
     // open model selector popover, search and select a model
     await user.click(screen.getByLabelText("Select model"));
+    expect(screen.getByRole("option", { name: /OpenAI GPT-5.4/i })).toBeDisabled();
     await user.type(screen.getByLabelText("Search models"), "4.1");
     await user.click(screen.getByRole("option", { name: /OpenAI GPT-4.1/i }));
 
@@ -204,7 +212,9 @@ describe("App", () => {
     await user.click(screen.getByRole("link", { name: "Diagnostics" }));
     expect(await screen.findByRole("heading", { name: "Bridge facts" })).toBeInTheDocument();
     expect(screen.getByText("2.0.0")).toBeInTheDocument();
-    expect(screen.getByText("OpenAI GPT-5 mini, OpenAI GPT-4.1")).toBeInTheDocument();
+    expect(
+      screen.getByText("OpenAI GPT-5.4 (unavailable), OpenAI GPT-5 mini, OpenAI GPT-4.1")
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Logout" }));
     await user.click(screen.getByRole("link", { name: "Chat" }));
@@ -287,6 +297,26 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "Logout" }));
     expect(await screen.findAllByText("logout_failed")).not.toHaveLength(0);
+  });
+
+  it("keeps send disabled when only unsupported models are available", async () => {
+    renderApp(
+      createBaseClient({
+        bootstrap: vi.fn().mockResolvedValue({
+          ...createReadyBootstrap(),
+          models: [
+            {
+              availability: "unsupported",
+              id: "openai/gpt-5.4",
+              label: "OpenAI GPT-5.4"
+            }
+          ]
+        })
+      })
+    );
+
+    expect(await screen.findByLabelText("Select model")).toBeInTheDocument();
+    expect(screen.getByLabelText("Send")).toBeDisabled();
   });
 
   it("stops generation when stop button is clicked", async () => {
