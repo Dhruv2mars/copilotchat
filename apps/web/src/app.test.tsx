@@ -163,7 +163,8 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Connect GitHub Copilot" }));
     expect(await screen.findByRole("heading", { name: "dhruv2mars" })).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText("Model"), "openai/gpt-4.1");
+    await user.type(screen.getByLabelText("Search models"), "4.1");
+    await user.click(screen.getByRole("button", { name: /OpenAI GPT-4.1/i }));
     await user.type(screen.getByLabelText("Message"), "Ship it");
     await user.click(screen.getByRole("button", { name: "Send" }));
 
