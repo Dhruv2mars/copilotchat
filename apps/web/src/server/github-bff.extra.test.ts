@@ -1010,6 +1010,164 @@ describe("github-bff extra", () => {
     ).rejects.toThrow("rate_limited");
   });
 
+  it("keeps probing other models when one probe returns a transient plain-text failure", async () => {
+    const fetchFn = vi.fn(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/catalog/models")) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "openai/gpt-5-mini",
+              supported_input_modalities: ["text"],
+              supported_output_modalities: ["text"]
+            },
+            {
+              id: "openai/gpt-4.1",
+              supported_input_modalities: ["text"],
+              supported_output_modalities: ["text"]
+            }
+          ])
+        );
+      }
+
+      if (url.endsWith("/user")) {
+        return new Response(
+          JSON.stringify({
+            login: "Dhruv2mars"
+          })
+        );
+      }
+
+      if (url.endsWith("/inference/chat/completions")) {
+        const body = JSON.parse(String(init?.body)) as { model?: string };
+        if (body.model === "openai/gpt-5-mini") {
+          return new Response("Too many requests", {
+            status: 429
+          });
+        }
+
+        if (body.model === "openai/gpt-4.1") {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: "ok"
+                  }
+                }
+              ]
+            })
+          );
+        }
+      }
+
+      return new Response("not found", {
+        status: 404
+      });
+    });
+
+    const bff = createGitHubBff({
+      allowDevCliAuth: false,
+      clientId: "client-1",
+      cookieSecret: "secret-secret-secret-secret",
+      execCommand: vi.fn(),
+      fetchFn
+    });
+
+    await expect(
+      bff.authWithPat({
+        token: "ghp_pat_12345678"
+      })
+    ).resolves.toMatchObject({
+      auth: {
+        accountLabel: "Dhruv2mars",
+        authenticated: true
+      },
+      models: [
+        {
+          id: "openai/gpt-4.1",
+          label: "OpenAI GPT-4.1"
+        }
+      ]
+    });
+  });
+
+  it("keeps probing other models when one probe throws a non-error value", async () => {
+    const fetchFn = vi.fn(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/catalog/models")) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: "openai/gpt-5-mini",
+              supported_input_modalities: ["text"],
+              supported_output_modalities: ["text"]
+            },
+            {
+              id: "openai/gpt-4.1",
+              supported_input_modalities: ["text"],
+              supported_output_modalities: ["text"]
+            }
+          ])
+        );
+      }
+
+      if (url.endsWith("/user")) {
+        return new Response(
+          JSON.stringify({
+            login: "Dhruv2mars"
+          })
+        );
+      }
+
+      if (url.endsWith("/inference/chat/completions")) {
+        const body = JSON.parse(String(init?.body)) as { model?: string };
+        if (body.model === "openai/gpt-5-mini") {
+          throw "boom";
+        }
+
+        if (body.model === "openai/gpt-4.1") {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: "ok"
+                  }
+                }
+              ]
+            })
+          );
+        }
+      }
+
+      return new Response("not found", {
+        status: 404
+      });
+    });
+
+    const bff = createGitHubBff({
+      allowDevCliAuth: false,
+      clientId: "client-1",
+      cookieSecret: "secret-secret-secret-secret",
+      execCommand: vi.fn(),
+      fetchFn
+    });
+
+    await expect(
+      bff.authWithPat({
+        token: "ghp_pat_12345678"
+      })
+    ).resolves.toMatchObject({
+      models: [
+        {
+          id: "openai/gpt-4.1",
+          label: "OpenAI GPT-4.1"
+        }
+      ]
+    });
+  });
+
   it("refreshes legacy session cookies that do not store validated models", async () => {
     const fetchFn = vi.fn(async (input, init) => {
       const url = String(input);

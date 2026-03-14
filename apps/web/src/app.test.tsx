@@ -159,6 +159,8 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Logout" }));
     await user.click(screen.getByRole("link", { name: "Chat" }));
     expect(await screen.findByRole("heading", { name: "Connect a PAT with Models access" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Logout" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Fresh chat/i })).toBeNull();
   });
 
   it("surfaces pat, cli, chat, and logout failures", async () => {
@@ -288,6 +290,23 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Connect PAT" }));
     expect(await screen.findByRole("heading", { name: "Dhruv2mars" })).toBeInTheDocument();
     expect(screen.queryByDisplayValue("github_pat_test")).toBeNull();
+  });
+
+  it("resets the selected model when logout drops auth back to signed out", async () => {
+    const client = createBaseClient({
+      bootstrap: vi.fn().mockResolvedValue(createReadyBootstrap()),
+      logout: vi.fn().mockResolvedValue(createSignedOutBootstrap())
+    });
+
+    renderApp(client);
+
+    const user = userEvent.setup();
+    expect(await screen.findByRole("heading", { name: "Dhruv2mars" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Model")).toHaveValue("openai/gpt-5-mini");
+
+    await user.click(screen.getByRole("button", { name: "Logout" }));
+    expect(await screen.findByRole("heading", { name: "Connect a PAT with Models access" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Logout" })).toBeNull();
   });
 
   it("switches the picker when the server falls back after no_access", async () => {

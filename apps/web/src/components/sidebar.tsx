@@ -65,6 +65,7 @@ export function Sidebar(props: {
 
         <Button
           className="w-full justify-start gap-2"
+          disabled={props.runtime !== "ready"}
           onClick={props.startNewThread}
           size="sm"
           type="button"
@@ -133,6 +134,7 @@ export function Sidebar(props: {
           <Input
             aria-label="Search sessions"
             className="pl-9 h-9 text-sm"
+            disabled={props.runtime !== "ready"}
             onChange={(event) => props.setSessionSearch(event.target.value)}
             placeholder="Find a thread..."
             value={props.sessionSearch}
@@ -189,16 +191,18 @@ export function Sidebar(props: {
             </Badge>
             <span className="text-sm font-medium truncate">{props.accountLabel}</span>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onClick={() => void props.logout()}
-            type="button"
-          >
-            <LogOut className="h-4 w-4" />
-            <span className="sr-only">Logout</span>
-          </Button>
+          {props.runtime === "ready" ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              onClick={() => void props.logout()}
+              type="button"
+            >
+              <LogOut className="h-4 w-4" />
+              <span className="sr-only">Logout</span>
+            </Button>
+          ) : null}
         </div>
         {props.statusNote ? (
           <p className="text-xs text-muted-foreground truncate">{props.statusNote}</p>
