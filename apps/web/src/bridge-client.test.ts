@@ -227,13 +227,7 @@ describe("bridge-client", () => {
       models: []
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "http://127.0.0.1:8787/health",
-      expect.objectContaining({
-        targetAddressSpace: "local"
-      })
-    );
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://127.0.0.1:8787/health", undefined);
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "http://127.0.0.1:8787/pair/start",
@@ -383,12 +377,7 @@ describe("bridge-client", () => {
       },
       models: []
     });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8787/health",
-      expect.objectContaining({
-        targetAddressSpace: "local"
-      })
-    );
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8787/health", undefined);
   });
 
   it("falls back when the browser has no permissions api", async () => {
