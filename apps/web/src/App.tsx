@@ -42,6 +42,7 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
 
   const bootstrap = bootstrapQuery.data ?? null;
   const models = bootstrap?.models ?? [];
+  const availableModels = models.filter((model) => model.availability === "available");
   const isBridgeReachable = bootstrap?.bridge.reachable ?? false;
   const isReady = Boolean(bootstrap?.auth.authenticated);
   const accountLabel = bootstrap?.auth.accountLabel ?? "GitHub Copilot";
@@ -63,10 +64,10 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
       return;
     }
 
-    if (!models.some((model) => model.id === selectedModel)) {
-      setSelectedModel(models[0].id);
+    if (!models.some((model) => model.id === selectedModel && model.availability === "available")) {
+      setSelectedModel(availableModels[0]?.id ?? "");
     }
-  }, [models, selectedModel]);
+  }, [availableModels, models, selectedModel]);
 
   useEffect(() => {
     if (!isReady || activeSessionId) {

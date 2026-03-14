@@ -1,6 +1,10 @@
 import type { ChatMessage, ChatStreamRequest } from "@copilotchat/shared";
 
 import type { StoredSession } from "./auth-session-manager";
+import {
+  KNOWN_UNAVAILABLE_COPILOT_MODELS,
+  OPENCODE_COPILOT_MODEL_CATALOG
+} from "./copilot-model-catalog";
 import { normalizeUpstreamEvent } from "./stream-normalizer";
 
 type BridgeFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -22,6 +26,9 @@ interface CopilotModelRecord {
   id: string;
   model_picker_enabled?: boolean;
   name?: string;
+  policy?: {
+    state?: string;
+  };
   preview?: boolean;
   supported_endpoints?: string[];
 }
@@ -115,23 +122,29 @@ export class GitHubCopilotClient {
 
   async listModels(input: { organization?: string; token: string }): Promise<CatalogSourceModel[]> {
     const records = await this.fetchModelRecords(input.token);
-
-    const preferredByFamily = new Map<string, CopilotModelRecord>();
-
-    for (const model of records.filter(isChatCapable).filter(isPickerVisible)) {
-      const family = normalizeFamily(model);
-      const current = preferredByFamily.get(family);
-      if (!current || scoreModel(model) > scoreModel(current)) {
-        preferredByFamily.set(family, model);
-      }
+    const liveModels = records.filter(isChatCapable);
+    if (liveModels.length === 0) {
+      return [];
     }
 
-    return Array.from(preferredByFamily.values()).map((model) => ({
+    return OPENCODE_COPILOT_MODEL_CATALOG.map((catalogModel) => {
+      const liveModel = pickCatalogMatch(
+        liveModels.filter(
+          (model) => model.id === catalogModel.id || normalizeFamily(model) === catalogModel.id
+        )
+      );
+      const isAvailable = liveModel
+        ? liveModel.policy?.state !== "disabled" &&
+          !KNOWN_UNAVAILABLE_COPILOT_MODELS.has(catalogModel.id)
+        : false;
+
+      return {
         capabilities: ["chat"],
-        id: model.id,
-        label: model.name ?? model.id,
-        status: "available" as const
-      }));
+        id: liveModel?.id ?? catalogModel.id,
+        label: liveModel?.name ?? catalogModel.label,
+        status: isAvailable ? ("available" as const) : ("unavailable" as const)
+      };
+    });
   }
 
   async *streamChat(input: {
@@ -606,13 +619,19 @@ function isChatCapable(model: CopilotModelRecord) {
   return model.capabilities?.type === "chat";
 }
 
-function isPickerVisible(model: CopilotModelRecord) {
-  return model.model_picker_enabled !== false;
-}
-
 function normalizeFamily(model: CopilotModelRecord) {
   const family = model.capabilities?.family?.trim();
   return family || model.id;
+}
+
+function pickCatalogMatch(models: CopilotModelRecord[]) {
+  return models.reduce<CopilotModelRecord | null>((best, model) => {
+    if (!best || scoreModel(model) > scoreModel(best)) {
+      return model;
+    }
+
+    return best;
+  }, null);
 }
 
 function scoreModel(model: CopilotModelRecord) {

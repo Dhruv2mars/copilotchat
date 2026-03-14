@@ -43,6 +43,7 @@ describe("bridge-client", () => {
         new Response(
           JSON.stringify([
             {
+              availability: "available",
               id: "openai/gpt-5-mini",
               label: "OpenAI GPT-5 mini"
             }
@@ -83,10 +84,12 @@ describe("bridge-client", () => {
         new Response(
           JSON.stringify([
             {
+              availability: "available",
               id: "openai/gpt-5-mini",
               label: "OpenAI GPT-5 mini"
             },
             {
+              availability: "available",
               id: "openai/gpt-4.1",
               label: "OpenAI GPT-4.1"
             }
@@ -144,6 +147,7 @@ describe("bridge-client", () => {
       },
       models: [
         {
+          availability: "available",
           id: "openai/gpt-5-mini",
           label: "OpenAI GPT-5 mini"
         }
@@ -173,10 +177,12 @@ describe("bridge-client", () => {
       },
       models: [
         {
+          availability: "available",
           id: "openai/gpt-5-mini",
           label: "OpenAI GPT-5 mini"
         },
         {
+          availability: "available",
           id: "openai/gpt-4.1",
           label: "OpenAI GPT-4.1"
         }
@@ -378,6 +384,7 @@ describe("bridge-client", () => {
         new Response(
           JSON.stringify([
             {
+              availability: "available",
               id: "openai/gpt-5-mini",
               label: "OpenAI GPT-5 mini"
             }
@@ -417,6 +424,7 @@ describe("bridge-client", () => {
       },
       models: [
         {
+          availability: "available",
           id: "openai/gpt-5-mini",
           label: "OpenAI GPT-5 mini"
         }

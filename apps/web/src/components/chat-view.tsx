@@ -15,7 +15,7 @@ export function ChatView(props: {
     messages: ChatMessage[];
   } | null;
   isSending: boolean;
-  models: { id: string; label: string }[];
+  models: { availability: "available" | "unsupported"; id: string; label: string }[];
   onStop?: () => void;
   selectedModel: string;
   sendMessage(): Promise<void>;

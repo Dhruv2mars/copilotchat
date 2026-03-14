@@ -18,14 +18,17 @@ function renderChatView(overrides: Partial<Parameters<typeof ChatView>[0]> = {})
       isSending={false}
       models={[
         {
+          availability: "available",
           id: "openai/gpt-5-mini",
           label: "OpenAI GPT-5 mini"
         },
         {
+          availability: "available",
           id: "openai/gpt-4.1",
           label: "OpenAI GPT-4.1"
         },
         {
+          availability: "unsupported",
           id: "anthropic/claude-sonnet-4",
           label: "Claude Sonnet 4"
         }
@@ -76,6 +79,17 @@ describe("ChatView", () => {
     await user.type(screen.getByLabelText("Search models"), "zzz");
 
     expect(screen.getByText("No models match.")).toBeInTheDocument();
+  });
+
+  it("shows unavailable models but prevents selecting them", async () => {
+    const user = userEvent.setup();
+
+    renderChatView();
+
+    await user.click(screen.getByLabelText("Select model"));
+
+    const unavailable = screen.getByRole("option", { name: /Claude Sonnet 4/i });
+    expect(unavailable).toBeDisabled();
   });
 
   it("sends message on Enter key", async () => {
