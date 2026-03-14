@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { GitHubModelsClient } from "../src/github-models-client";
+import { GitHubCopilotClient } from "../src/github-copilot-client";
 
-describe("GitHubModelsClient", () => {
-  it("connects by validating model access and loading the viewer", async () => {
+describe("GitHubCopilotClient", () => {
+  it("connects by validating copilot access and loading the viewer", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -11,10 +11,12 @@ describe("GitHubModelsClient", () => {
           JSON.stringify({
             data: [
               {
-                id: "openai/gpt-4.1",
-                name: "GPT-4.1",
-                supported_input_modalities: ["text"],
-                supported_output_modalities: ["text"]
+                capabilities: {
+                  family: "gpt-4o",
+                  type: "chat"
+                },
+                id: "gpt-4o",
+                name: "GPT-4o"
               }
             ]
           })
@@ -28,10 +30,10 @@ describe("GitHubModelsClient", () => {
         )
       );
 
-    const client = new GitHubModelsClient({
+    const client = new GitHubCopilotClient({
       apiBaseUrl: "https://api.github.test",
       fetchFn: fetchMock,
-      modelsBaseUrl: "https://models.github.test"
+      copilotBaseUrl: "https://api.githubcopilot.test"
     });
 
     await expect(
@@ -48,10 +50,13 @@ describe("GitHubModelsClient", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "https://models.github.test/catalog/models",
+      "https://api.githubcopilot.test/models",
       expect.objectContaining({
         headers: expect.objectContaining({
-          authorization: "Bearer ghp_1234567890"
+          authorization: "Bearer ghp_1234567890",
+          "copilot-integration-id": "vscode-chat",
+          "editor-plugin-version": "copilotchat/1.0",
+          "editor-version": "copilotchat/1.0"
         })
       })
     );
@@ -66,30 +71,43 @@ describe("GitHubModelsClient", () => {
     );
   });
 
-  it("lists chat-capable models and streams openai-compatible sse frames", async () => {
+  it("lists copilot chat models and streams chat completions", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify([
             {
-              capabilities: ["chat"],
-              id: "openai/gpt-4.1",
-              name: "GPT-4.1"
+              capabilities: {
+                family: "gpt-4o",
+                type: "chat"
+              },
+              id: "gpt-4o-2024-11-20",
+              name: "GPT-4o"
             },
             {
-              id: "no/chat/metadata"
+              capabilities: {
+                family: "gpt-4o",
+                type: "chat"
+              },
+              id: "gpt-4o",
+              name: "GPT-4o"
             },
             {
-              id: "openai/text-embeddings-3-small",
-              name: "Embeddings",
-              supported_input_modalities: ["text"],
-              supported_output_modalities: ["vector"]
+              capabilities: {
+                family: "text-embedding-3-small",
+                type: "embeddings"
+              },
+              id: "text-embedding-3-small",
+              name: "Embeddings"
             },
             {
-              id: "openai/gpt-4.5",
-              name: "GPT-4.5",
-              task: "chat-completion"
+              capabilities: {
+                family: "gpt-4o-mini",
+                type: "chat"
+              },
+              id: "gpt-4o-mini",
+              name: "GPT-4o mini"
             }
           ])
         )
@@ -100,7 +118,8 @@ describe("GitHubModelsClient", () => {
             start(controller) {
               controller.enqueue(
                 new TextEncoder().encode(
-                  'data: {"choices":[{"delta":{"content":"Hello "}}]}\n\n' +
+                  'data: {"choices":[]}\n\n' +
+                    'data: {"choices":[{"delta":{"content":"Hello "}}]}\n\n' +
                     'data: {"choices":[{"delta":{"content":[{"type":"text","text":"world"},{"text":"!"}]}}],"usage":{"prompt_tokens":7,"completion_tokens":4}}\n\n' +
                     "data: [DONE]\n\n"
                 )
@@ -111,9 +130,9 @@ describe("GitHubModelsClient", () => {
         )
       );
 
-    const client = new GitHubModelsClient({
+    const client = new GitHubCopilotClient({
       fetchFn: fetchMock,
-      modelsBaseUrl: "https://models.github.test"
+      copilotBaseUrl: "https://api.githubcopilot.test"
     });
 
     await expect(
@@ -123,14 +142,14 @@ describe("GitHubModelsClient", () => {
     ).resolves.toEqual([
       {
         capabilities: ["chat"],
-        id: "openai/gpt-4.1",
-        label: "GPT-4.1",
+        id: "gpt-4o",
+        label: "GPT-4o",
         status: "available"
       },
       {
         capabilities: ["chat"],
-        id: "openai/gpt-4.5",
-        label: "GPT-4.5",
+        id: "gpt-4o-mini",
+        label: "GPT-4o mini",
         status: "available"
       }
     ]);
@@ -145,7 +164,7 @@ describe("GitHubModelsClient", () => {
             role: "user"
           }
         ],
-        modelId: "openai/gpt-4.1",
+        modelId: "gpt-4o",
         requestId: "req-1"
       },
       signal: new AbortController().signal,
@@ -183,8 +202,8 @@ describe("GitHubModelsClient", () => {
     ]);
   });
 
-  it("maps request failures and missing streams into bridge-safe errors", async () => {
-    const failingClient = new GitHubModelsClient({
+  it("maps copilot request failures and missing streams into bridge-safe errors", async () => {
+    const failingClient = new GitHubCopilotClient({
       fetchFn: vi
         .fn()
         .mockResolvedValueOnce(
@@ -220,10 +239,9 @@ describe("GitHubModelsClient", () => {
 
     await expect(
       failingClient.streamChat({
-        organization: "acme",
         request: {
           messages: [],
-          modelId: "openai/gpt-4.1",
+          modelId: "gpt-4o",
           requestId: "req-2"
         },
         signal: new AbortController().signal,
@@ -235,7 +253,7 @@ describe("GitHubModelsClient", () => {
       failingClient.streamChat({
         request: {
           messages: [],
-          modelId: "openai/gpt-4.1",
+          modelId: "gpt-4o",
           requestId: "req-3"
         },
         signal: new AbortController().signal,
@@ -245,16 +263,19 @@ describe("GitHubModelsClient", () => {
   });
 
   it("keeps short token hints and falls back on non-json upstream errors", async () => {
-    const connectClient = new GitHubModelsClient({
+    const connectClient = new GitHubCopilotClient({
       fetchFn: vi
         .fn()
         .mockResolvedValueOnce(
           new Response(
             JSON.stringify([
               {
-                id: "openai/gpt-4.1",
-                supported_input_modalities: ["text"],
-                supported_output_modalities: ["text"]
+                capabilities: {
+                  family: "gpt-4o",
+                  type: "chat"
+                },
+                id: "gpt-4o",
+                name: "GPT-4o"
               }
             ])
           )
@@ -276,7 +297,7 @@ describe("GitHubModelsClient", () => {
       tokenHint: "short123"
     });
 
-    const fallbackClient = new GitHubModelsClient({
+    const fallbackClient = new GitHubCopilotClient({
       fetchFn: vi
         .fn()
         .mockResolvedValueOnce(
@@ -295,15 +316,15 @@ describe("GitHubModelsClient", () => {
       fallbackClient.listModels({
         token: "ghp_1234567890"
       })
-    ).rejects.toThrow("github_models_request_failed");
+    ).rejects.toThrow("github_copilot_request_failed");
     await expect(
       fallbackClient.listModels({
         token: "ghp_1234567890"
       })
-    ).rejects.toThrow("github_models_request_failed");
+    ).rejects.toThrow("github_copilot_request_failed");
   });
 
-  it("returns empty catalogs for unsupported payloads and ignores empty deltas", async () => {
+  it("returns empty model lists for unsupported payloads and ignores empty deltas", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ unexpected: true })))
@@ -323,7 +344,7 @@ describe("GitHubModelsClient", () => {
         )
       );
 
-    const client = new GitHubModelsClient({
+    const client = new GitHubCopilotClient({
       fetchFn: fetchMock
     });
 
@@ -337,7 +358,7 @@ describe("GitHubModelsClient", () => {
     for await (const event of client.streamChat({
       request: {
         messages: [],
-        modelId: "openai/gpt-4.1",
+        modelId: "gpt-4o",
         requestId: "req-4"
       },
       signal: new AbortController().signal,
@@ -349,21 +370,102 @@ describe("GitHubModelsClient", () => {
     expect(events).toEqual(["assistant_done"]);
   });
 
+  it("prefers picker-enabled variants when no family alias exists", async () => {
+    const client = new GitHubCopilotClient({
+      fetchFn: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  family: "claude-sonnet-4",
+                  type: "chat"
+                },
+                id: "claude-sonnet-4-2025-01-01",
+                name: "Claude Sonnet 4",
+                preview: true
+              },
+              {
+                capabilities: {
+                  family: "claude-sonnet-4",
+                  type: "chat"
+                },
+                id: "claude-sonnet-4-2025-02-01",
+                model_picker_enabled: true,
+                name: "Claude Sonnet 4",
+                preview: true
+              }
+            ]
+          })
+        )
+      )
+    });
+
+    await expect(
+      client.listModels({
+        token: "ghp_1234567890"
+      })
+    ).resolves.toEqual([
+      {
+        capabilities: ["chat"],
+        id: "claude-sonnet-4-2025-02-01",
+        label: "Claude Sonnet 4",
+        status: "available"
+      }
+    ]);
+  });
+
+  it("falls back to model id when family and name are absent", async () => {
+    const client = new GitHubCopilotClient({
+      fetchFn: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  family: " ",
+                  type: "chat"
+                },
+                id: "custom-model"
+              }
+            ]
+          })
+        )
+      )
+    });
+
+    await expect(
+      client.listModels({
+        token: "ghp_1234567890"
+      })
+    ).resolves.toEqual([
+      {
+        capabilities: ["chat"],
+        id: "custom-model",
+        label: "custom-model",
+        status: "available"
+      }
+    ]);
+  });
+
   it("uses global fetch when no fetch override is passed", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify([
           {
-            id: "openai/gpt-4.1",
-            supported_input_modalities: ["text"],
-            supported_output_modalities: ["text"]
+            capabilities: {
+              family: "gpt-4o",
+              type: "chat"
+            },
+            id: "gpt-4o",
+            name: "GPT-4o"
           }
         ])
       )
     ) as unknown as typeof fetch;
 
-    const client = new GitHubModelsClient();
+    const client = new GitHubCopilotClient();
     await expect(
       client.listModels({
         token: "ghp_1234567890"

@@ -9,13 +9,15 @@ interface GitHubUser {
   login: string;
 }
 
-interface CatalogModelRecord {
-  capabilities?: string[];
+interface CopilotModelRecord {
+  capabilities?: {
+    family?: string;
+    type?: string;
+  };
   id: string;
+  model_picker_enabled?: boolean;
   name?: string;
-  supported_input_modalities?: string[];
-  supported_output_modalities?: string[];
-  task?: string;
+  preview?: boolean;
 }
 
 interface CatalogSourceModel {
@@ -25,19 +27,21 @@ interface CatalogSourceModel {
   status: "available" | "maintenance" | "unavailable";
 }
 
-export class GitHubModelsClient {
+export class GitHubCopilotClient {
   private readonly apiBaseUrl: string;
+  private readonly copilotBaseUrl: string;
   private readonly fetchFn: BridgeFetch;
-  private readonly modelsBaseUrl: string;
 
   constructor(options?: {
     apiBaseUrl?: string;
+    copilotBaseUrl?: string;
     fetchFn?: BridgeFetch;
     modelsBaseUrl?: string;
   }) {
     this.apiBaseUrl = options?.apiBaseUrl ?? "https://api.github.com";
+    this.copilotBaseUrl =
+      options?.copilotBaseUrl ?? options?.modelsBaseUrl ?? "https://api.githubcopilot.com";
     this.fetchFn = options?.fetchFn ?? fetch;
-    this.modelsBaseUrl = options?.modelsBaseUrl ?? "https://models.github.ai";
   }
 
   async connect(input: { organization?: string; token: string }): Promise<StoredSession> {
@@ -62,8 +66,8 @@ export class GitHubModelsClient {
   }
 
   async listModels(input: { organization?: string; token: string }): Promise<CatalogSourceModel[]> {
-    const payload = await this.requestJson<unknown>(`${this.modelsBaseUrl}/catalog/models`, {
-      headers: githubHeaders(input.token)
+    const payload = await this.requestJson<unknown>(`${this.copilotBaseUrl}/models`, {
+      headers: copilotHeaders(input.token)
     });
 
     const records = Array.isArray(payload)
@@ -72,10 +76,17 @@ export class GitHubModelsClient {
         ? payload.data
         : [];
 
-    return records
-      .filter(isCatalogModelRecord)
-      .filter((model) => isChatCapable(model))
-      .map((model) => ({
+    const preferredByFamily = new Map<string, CopilotModelRecord>();
+
+    for (const model of records.filter(isCopilotModelRecord).filter(isChatCapable)) {
+      const family = normalizeFamily(model);
+      const current = preferredByFamily.get(family);
+      if (!current || scoreModel(model) > scoreModel(current)) {
+        preferredByFamily.set(family, model);
+      }
+    }
+
+    return Array.from(preferredByFamily.values()).map((model) => ({
         capabilities: ["chat"],
         id: model.id,
         label: model.name ?? model.id,
@@ -89,10 +100,7 @@ export class GitHubModelsClient {
     signal: AbortSignal;
     token: string;
   }) {
-    const endpoint = input.organization
-      ? `${this.modelsBaseUrl}/orgs/${encodeURIComponent(input.organization)}/inference/chat/completions`
-      : `${this.modelsBaseUrl}/inference/chat/completions`;
-    const response = await this.fetchFn(endpoint, {
+    const response = await this.fetchFn(`${this.copilotBaseUrl}/chat/completions`, {
       body: JSON.stringify({
         messages: input.request.messages.map(toUpstreamMessage),
         model: input.request.modelId,
@@ -102,7 +110,7 @@ export class GitHubModelsClient {
         }
       }),
       headers: {
-        ...githubHeaders(input.token),
+        ...copilotHeaders(input.token),
         "content-type": "application/json"
       },
       method: "POST",
@@ -224,22 +232,54 @@ function githubHeaders(token: string) {
   };
 }
 
-function isCatalogModelRecord(value: unknown): value is CatalogModelRecord {
+function copilotHeaders(token: string) {
+  return {
+    accept: "application/json",
+    authorization: `Bearer ${token}`,
+    "copilot-integration-id": "vscode-chat",
+    "editor-plugin-version": "copilotchat/1.0",
+    "editor-version": "copilotchat/1.0"
+  };
+}
+
+function isCopilotModelRecord(value: unknown): value is CopilotModelRecord {
   return Boolean(value && typeof value === "object" && "id" in value && typeof value.id === "string");
 }
 
-function isChatCapable(model: CatalogModelRecord) {
-  if (model.capabilities?.includes("chat")) {
-    return true;
+function isChatCapable(model: CopilotModelRecord) {
+  return model.capabilities?.type === "chat";
+}
+
+function normalizeFamily(model: CopilotModelRecord) {
+  const family = model.capabilities?.family?.trim();
+  return family || model.id;
+}
+
+function scoreModel(model: CopilotModelRecord) {
+  const family = normalizeFamily(model);
+  let score = 0;
+
+  if (model.id === family) {
+    score += 4;
   }
 
-  if (model.task === "chat-completion") {
-    return true;
+  if (model.model_picker_enabled) {
+    score += 2;
   }
 
-  const input = Array.isArray(model.supported_input_modalities) ? model.supported_input_modalities : [];
-  const output = Array.isArray(model.supported_output_modalities) ? model.supported_output_modalities : [];
-  return input.includes("text") && output.includes("text");
+  if (!looksVersioned(model.id)) {
+    score += 1;
+  }
+
+  if (!model.preview) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function looksVersioned(value: string) {
+  return /-\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 async function readError(response: Response) {
@@ -258,9 +298,9 @@ async function readError(response: Response) {
       return payload.message;
     }
 
-    return "github_models_request_failed";
+    return "github_copilot_request_failed";
   } catch {
-    return "github_models_request_failed";
+    return "github_copilot_request_failed";
   }
 }
 

@@ -1,7 +1,7 @@
 import type { AuthDeviceStartRequest, AuthDeviceStartResponse } from "@copilotchat/shared";
 
 import type { AuthProvider, StoredSession } from "./auth-session-manager";
-import { GitHubModelsClient } from "./github-models-client";
+import { GitHubCopilotClient } from "./github-copilot-client";
 
 type BridgeFetch = (input: string, init?: RequestInit) => Promise<Response>;
 type OpenUrl = (url: string) => Promise<void>;
@@ -28,7 +28,7 @@ export class GitHubDeviceFlowClient implements AuthProvider {
   private readonly clientId: string;
   private readonly fetchFn: BridgeFetch;
   private readonly loginBaseUrl: string;
-  private readonly modelsClient: GitHubModelsClient;
+  private readonly copilotClient: GitHubCopilotClient;
   private readonly openUrl?: OpenUrl;
   private readonly scope?: string;
 
@@ -36,14 +36,14 @@ export class GitHubDeviceFlowClient implements AuthProvider {
     clientId: string;
     fetchFn?: BridgeFetch;
     loginBaseUrl?: string;
-    modelsClient: GitHubModelsClient;
+    copilotClient: GitHubCopilotClient;
     openUrl?: OpenUrl;
     scope?: string;
   }) {
     this.clientId = options.clientId.trim();
     this.fetchFn = options.fetchFn ?? fetch;
     this.loginBaseUrl = options.loginBaseUrl ?? "https://github.com/login";
-    this.modelsClient = options.modelsClient;
+    this.copilotClient = options.copilotClient;
     this.openUrl = options.openUrl;
     this.scope = options.scope?.trim() || undefined;
   }
@@ -172,7 +172,7 @@ export class GitHubDeviceFlowClient implements AuthProvider {
     };
   }) {
     const accessToken = input.payload.access_token as string;
-    const session = await this.modelsClient.connect({
+    const session = await this.copilotClient.connect({
       organization: input.organization,
       token: accessToken
     });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { GitHubCopilotClient } from "../src/github-copilot-client";
 import { GitHubDeviceFlowClient } from "../src/github-device-flow-client";
-import { GitHubModelsClient } from "../src/github-models-client";
 
 describe("GitHubDeviceFlowClient", () => {
   it("starts device auth and opens the browser", async () => {
@@ -21,7 +21,7 @@ describe("GitHubDeviceFlowClient", () => {
     const client = new GitHubDeviceFlowClient({
       clientId: "client-1",
       fetchFn,
-      modelsClient: new GitHubModelsClient({
+      copilotClient: new GitHubCopilotClient({
         fetchFn: vi.fn()
       }),
       openUrl,
@@ -71,7 +71,7 @@ describe("GitHubDeviceFlowClient", () => {
     const client = new GitHubDeviceFlowClient({
       clientId: "client-1",
       fetchFn,
-      modelsClient: new GitHubModelsClient({
+      copilotClient: new GitHubCopilotClient({
         fetchFn: vi.fn()
       }),
       openUrl
@@ -128,7 +128,7 @@ describe("GitHubDeviceFlowClient", () => {
           })
         )
       );
-    const modelsClient = {
+    const copilotClient = {
       connect: vi
         .fn()
         .mockResolvedValueOnce({
@@ -143,12 +143,12 @@ describe("GitHubDeviceFlowClient", () => {
           token: "ghu_access_2",
           tokenHint: "ghu_...ss_2"
         })
-    } as unknown as GitHubModelsClient;
+    } as unknown as GitHubCopilotClient;
 
     const client = new GitHubDeviceFlowClient({
       clientId: "client-1",
       fetchFn,
-      modelsClient
+      copilotClient
     });
 
     await expect(
@@ -194,7 +194,7 @@ describe("GitHubDeviceFlowClient", () => {
     const client = new GitHubDeviceFlowClient({
       clientId: "",
       fetchFn: vi.fn(),
-      modelsClient: new GitHubModelsClient({
+      copilotClient: new GitHubCopilotClient({
         fetchFn: vi.fn()
       })
     });
@@ -213,7 +213,7 @@ describe("GitHubDeviceFlowClient", () => {
             })
           )
         ),
-      modelsClient: new GitHubModelsClient({
+      copilotClient: new GitHubCopilotClient({
         fetchFn: vi.fn()
       })
     });
@@ -244,13 +244,13 @@ describe("GitHubDeviceFlowClient", () => {
   });
 
   it("maps refresh token errors and leaves optional expiries undefined", async () => {
-    const modelsClient = {
+    const copilotClient = {
       connect: vi.fn().mockResolvedValue({
         accountLabel: "dhruv2mars",
         token: "ghu_access_3",
         tokenHint: "ghu_...ss_3"
       })
-    } as unknown as GitHubModelsClient;
+    } as unknown as GitHubCopilotClient;
 
     const refreshFailureClient = new GitHubDeviceFlowClient({
       clientId: "client-1",
@@ -258,7 +258,7 @@ describe("GitHubDeviceFlowClient", () => {
         .fn()
         .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 500 }))
         .mockResolvedValueOnce(new Response(JSON.stringify({}))),
-      modelsClient
+      copilotClient
     });
 
     await expect(
@@ -285,7 +285,7 @@ describe("GitHubDeviceFlowClient", () => {
           })
         )
       ),
-      modelsClient
+      copilotClient
     });
 
     await expect(
@@ -317,13 +317,13 @@ describe("GitHubDeviceFlowClient", () => {
 
     const client = new GitHubDeviceFlowClient({
       clientId: "client-1",
-      modelsClient: {
+      copilotClient: {
         connect: vi.fn().mockResolvedValue({
           accountLabel: "dhruv2mars",
           token: "ghu_access_4",
           tokenHint: "ghu_...ss_4"
         })
-      } as unknown as GitHubModelsClient
+      } as unknown as GitHubCopilotClient
     });
 
     await expect(
