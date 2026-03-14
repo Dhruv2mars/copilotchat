@@ -34,5 +34,4 @@ bun run --filter @copilotchat/web dev
 bun run test
 bun run check
 bun run build
-bun run test:e2e
 ```

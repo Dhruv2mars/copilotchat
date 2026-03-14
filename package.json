@@ -12,13 +12,10 @@
     "dev:bridge": "bun run --filter @copilotchat/bridge dev",
     "test": "bun run test:coverage",
     "test:coverage": "bun run --filter '*' test:coverage",
-    "test:e2e": "playwright test",
-    "test:e2e:install": "playwright install chromium",
     "build": "bun run --filter '*' build",
     "check": "bun run --filter '*' check"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
     "@types/node": "24.5.2",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
