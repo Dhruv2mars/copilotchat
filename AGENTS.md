@@ -87,6 +87,8 @@ bun run build
 - Verify the actual app manually after automated tests pass.
 - Do not use fake mode, mock providers, mock auth, or synthetic end-to-end flows for final verification.
 - End-to-end verification must use real integrations and real provider behavior, same as production.
+- After the verification loop is closed, run the full workflow from start to end with `agent-browser` before filing the PR.
+- The pre-PR browser pass must cover the real user flow end to end, not a partial spot check.
 - If real verification is blocked by missing credentials, missing external access, rate limits, or another hard constraint, stop and state the blocker explicitly. Do not substitute a fake flow.
 
 ## Code Rules
