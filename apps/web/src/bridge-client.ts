@@ -13,9 +13,6 @@ import type {
 
 type AppFetch = (input: string, init?: RequestInit) => Promise<Response>;
 type BridgePermissionState = "denied" | "granted" | "prompt" | "unsupported";
-type BridgeRequestInit = RequestInit & {
-  targetAddressSpace?: "local";
-};
 type PermissionStatusLike = {
   state: "denied" | "granted" | "prompt";
 };
@@ -474,7 +471,7 @@ async function readBridgePermission(input: {
 }
 
 async function request(fetchFn: AppFetch, url: string, init?: RequestInit) {
-  const response = await fetchFn(url, withBridgeAddressSpace(url, init));
+  const response = await fetchFn(url, init);
   if (!response.ok) {
     throw await readError(response);
   }
@@ -485,17 +482,6 @@ async function request(fetchFn: AppFetch, url: string, init?: RequestInit) {
 async function requestJson<T>(fetchFn: AppFetch, url: string, init?: RequestInit) {
   const response = await request(fetchFn, url, init);
   return (await response.json()) as T;
-}
-
-function withBridgeAddressSpace(url: string, init?: RequestInit) {
-  if (!isLoopbackTarget(url)) {
-    return init;
-  }
-
-  return {
-    ...init,
-    targetAddressSpace: "local"
-  } satisfies BridgeRequestInit;
 }
 
 async function readError(response: Response) {
