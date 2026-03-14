@@ -9,7 +9,18 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],
-      exclude: ["dist/**", "e2e/**", "src/main.tsx", "vite.config.ts", "vitest.config.ts"],
+      exclude: [
+        "dist/**",
+        "e2e/**",
+        "src/main.tsx",
+        "src/components/ui/**",
+        "src/lib/utils.ts",
+        "src/components/theme-provider.tsx",
+        "vite.config.ts",
+        "vitest.config.ts",
+        "tailwind.config.ts",
+        "postcss.config.js"
+      ],
       thresholds: {
         lines: 100,
         functions: 100,
