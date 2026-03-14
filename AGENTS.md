@@ -1,172 +1,186 @@
 # AGENTS.md — copilotchat
 
-## Project Overview
+## Product Goal
 
-Hybrid chat app: hosted Vite/React UI + local bridge for GitHub auth + inference.
-Monorepo with bun workspaces. Deployed on Vercel (serverless functions in `api/`).
+Hosted web chat app for GitHub Copilot users.
 
-### Workspace Packages
+User flow:
+- open hosted web app
+- app connects to local bridge on user machine
+- bridge pairs browser origin
+- user connects GitHub Copilot in bridge via device flow
+- bridge stores provider auth in OS secure storage
+- bridge fetches available chat models
+- user chats in web UI
+- bridge performs inference and streams tokens back
+
+Non-goal:
+- hosted backend holding user GitHub/Copilot tokens by default
+- PAT-first auth
+- browser talking direct to provider with raw token
+
+## Architecture
+
+Monorepo with bun workspaces.
+
+### Packages
 
 | Package | Path | Purpose |
 |---|---|---|
-| `@copilotchat/web` | `apps/web` | Vite + React frontend (Tailwind, Radix, Zustand, TanStack Query) |
-| `@copilotchat/bridge` | `packages/bridge` | Local bridge server (auth, pairing, streaming) |
-| `@copilotchat/shared` | `packages/shared` | Shared protocol types between web and bridge |
+| `@copilotchat/web` | `apps/web` | Hosted Vite/React UI |
+| `@copilotchat/bridge` | `packages/bridge` | Local bridge for pairing, auth, model discovery, streaming chat |
+| `@copilotchat/shared` | `packages/shared` | Shared protocol types |
 
-Serverless BFF lives in `apps/web/src/server/github-bff.ts`; Vercel handlers in `api/`.
+### System Boundaries
 
-## Build / Lint / Test Commands
+- `web` is untrusted for provider secrets
+- `bridge` is trusted for provider auth and inference
+- browser stores only local bridge pairing/session data
+- provider tokens live only in bridge secure storage
+- cloud hosts static app assets; no provider-token custody in default architecture
+
+### Desired Runtime Flow
+
+1. Web app probes local bridge health.
+2. Web app pairs with bridge for current origin.
+3. Bridge reports auth state.
+4. If signed out, web app starts device auth on bridge.
+5. Bridge opens GitHub device page and polls completion.
+6. Bridge stores session in OS keychain/secure store.
+7. Web app loads models from bridge.
+8. Web app sends chat request to bridge.
+9. Bridge streams assistant deltas back.
+10. Web app renders a normal chat experience.
+
+## Current Direction
+
+When code conflicts with old hosted-BFF assumptions, follow this target architecture:
+- local bridge is primary
+- streaming chat is primary
+- GitHub Copilot connect UX is primary
+- hosted BFF auth/chat code is legacy and should be removed unless explicitly retained for a proven need
+
+## Build / Dev
 
 ```bash
-# Install
 bun install
 
-# Dev (starts Vercel dev server wrapping both web + bridge)
+# primary dev loop
 bun run dev
-# Or individually:
-bun run --filter @copilotchat/web dev
-bun run --filter @copilotchat/bridge dev
 
-# Type check all packages
-bun run check
+# split processes
+bun run dev:web
+bun run dev:bridge
 
-# Build all packages
-bun run build
-
-# Run ALL tests with coverage (100% thresholds enforced)
+# checks
 bun run test
-
-# Run tests for a single package
-bun run --filter @copilotchat/web test:coverage
-bun run --filter @copilotchat/bridge test:coverage
-
-# Run a single test file
-bunx vitest run src/app-store.test.ts          # from apps/web/
-bunx vitest run src/bff-client.test.ts         # from apps/web/
-
-# Run a single test by name
-bunx vitest run -t "creates, updates, and deletes"  # from relevant workdir
-
-# Watch mode (single file)
-bunx vitest src/app-store.test.ts              # from apps/web/
+bun run check
+bun run build
 ```
 
-## Test Framework & Coverage
+## Testing Rules
 
-- **Vitest** with `@vitest/coverage-v8`. 100% coverage thresholds (lines, functions, branches, statements) on both `web` and `bridge`.
-- Web tests use `jsdom` environment + `@testing-library/react` + `@testing-library/user-event`.
-- Bridge tests use `node` environment.
-- Test setup: `apps/web/src/test/setup.ts` (cleanup, localStorage clear, ResizeObserver polyfill).
-- Test files are colocated: `foo.ts` -> `foo.test.ts` (same directory).
-- Use `/* v8 ignore next */` comments for intentional uncovered lines (theme cycling, etc.).
+- Vitest with 100% thresholds stays enforced.
+- Follow TDD.
+- Start with failing tests for auth flow, pairing flow, model load, chat streaming, and error states.
+- Prefer CLI-level / integration-like tests around bridge client behavior first.
+- Verify the actual app manually after automated tests pass.
 
-## Code Style
+## Code Rules
 
 ### General
 
-- **No ESLint or Prettier config.** Formatting is manual/editor-based.
-- **TypeScript strict mode** (`strict: true` in `tsconfig.base.json`).
-- **ES2022** target, **ESNext** modules, **Bundler** module resolution.
-- **Double quotes** for strings. **Semicolons** at end of statements.
-- **2-space indentation.**
-- All packages use `"type": "module"` (ESM).
+- TypeScript strict mode.
+- ESM only.
+- Double quotes.
+- Semicolons.
+- 2-space indent.
+- Prefer small factory functions over classes in app/web code.
 
 ### Imports
 
-Imports follow a strict grouping order separated by blank lines:
+Order:
+1. external
+2. workspace
+3. local
+4. css last
 
-1. **External packages** (node builtins, npm packages) — grouped together
-2. **Workspace packages** (`@copilotchat/shared`, etc.)
-3. **Local imports** (`./foo`, `../bar`)
-4. **CSS imports** last (`./styles.css`)
+Use `import type` where possible.
 
-Type-only imports use `import type { ... }` syntax. Mixed imports separate types:
-```ts
-import { createStore, type StoreApi } from "zustand/vanilla";
-import type { ChatMessage } from "@copilotchat/shared";
-```
+### Naming
 
-### Naming Conventions
+- files: kebab-case
+- components: named PascalCase exports
+- functions: camelCase
+- object shapes: `interface`
+- unions/aliases: `type`
+- no enums
 
-| Kind | Convention | Example |
-|---|---|---|
-| Files | `kebab-case.ts` / `kebab-case.tsx` | `app-store.ts`, `chat-view.tsx` |
-| React components | `PascalCase` (named export) | `export function ChatView(...)` |
-| Component files | `kebab-case.tsx` (NOT PascalCase) | `chat-view.tsx`, NOT `ChatView.tsx` |
-| Interfaces | `PascalCase`, no `I` prefix | `interface AppState { ... }` |
-| Types | `PascalCase` | `type RuntimeState = ...` |
-| Functions | `camelCase` | `createAppStore()`, `readErrorMessage()` |
-| Constants | `UPPER_SNAKE_CASE` or `camelCase` | `STORAGE_KEY`, `encoder` |
-| Factory functions | `create*` prefix | `createBridgeServer()`, `createHttpBffClient()` |
-| Test files | Same name + `.test.ts(x)` | `app-store.test.ts` |
+### Errors
 
-### TypeScript Patterns
+- throw machine-readable error codes
+- catch variable name: `errorValue`
+- bridge/http errors return `{ error: "code" }`
 
-- **Prefer `interface` for object shapes**, `type` for unions/aliases.
-- **Use `satisfies`** for type-safe object literals: `{ ... } satisfies SessionCookiePayload`.
-- **Cast API responses** with `as T`: `(await response.json()) as ChatCompletionPayload`.
-- **No enums.** Use string literal unions: `type RuntimeState = "loading" | "ready" | "signed_out"`.
-- **No classes in app code** (bridge uses factory functions returning plain objects with methods).
-- Exported types from shared package are the source of truth for protocol shapes.
+## Web App Contract
 
-### React Patterns
+The web app should assume:
+- bridge may be offline
+- pairing token may expire
+- auth may expire or require reconnect
+- models may change between sessions
+- streaming may abort mid-response
 
-- **Functional components only** — no class components.
-- **Props typed inline** in function signature: `function ChatView(props: { ... })`.
-- **No default exports** for components. Named exports: `export function App(...)`.
-- **Dependency injection** via props: `App` receives `client: BffClient` and `store: AppStore`.
-- **Zustand** for client state (vanilla store, persisted to localStorage).
-- **TanStack Query** for server state (`useQuery` for bootstrap).
-- **Tailwind CSS** for styling with `cn()` utility (clsx + tailwind-merge).
-- **Radix UI primitives** via shadcn-style `components/ui/` wrappers.
+The web app must:
+- recover cleanly from bridge offline/unpaired states
+- never require page reload for normal auth/chat flow
+- show device-code instructions clearly
+- stream assistant output incrementally
+- allow repeated chats like a normal chat app
 
-### Error Handling
+## Bridge Contract
 
-- Throw `new Error("snake_case_error_code")` — machine-readable error codes, not sentences.
-- Catch blocks use `errorValue` as the variable name (not `err` or `e`).
-- Pattern for unknown errors:
-  ```ts
-  } catch (errorValue) {
-    const message = errorValue instanceof Error ? errorValue.message : "fallback_code";
-  }
-  ```
-- API error responses return `{ error: "snake_case_code" }` JSON with appropriate HTTP status.
+The bridge must:
+- bind to loopback only
+- validate allowed origins
+- require pairing token for privileged routes
+- keep provider token out of browser responses
+- store auth in secure storage when available
+- support logout
+- support model listing
+- support streaming chat
+- support aborting an active stream
 
-### Test Patterns
-
-- Import `describe, expect, it, vi` from `vitest`.
-- Use `vi.fn()` for mocks, chain `.mockResolvedValue()` / `.mockRejectedValue()`.
-- No `beforeEach`/`afterAll` — setup is per-test via factory functions.
-- Factory helpers at top of test file: `createBaseClient()`, `createReadyBootstrap()`.
-- Assertions: `toMatchObject` for partial checks, `toEqual` for exact, `toThrow` for errors.
-- React tests use `render()`, `screen.findByRole()`, `userEvent.setup()`.
-
-### Architecture Patterns
-
-- **Factory function pattern**: `createGitHubBff(options)` returns object with methods. No classes.
-- **BFF (Backend-for-Frontend)**: `github-bff.ts` handles auth, cookie encryption, GitHub API calls.
-- **Vercel serverless handlers** in `api/` are thin wrappers calling BFF methods.
-- **Protocol types** in `packages/shared/src/protocol.ts` — single source of truth.
-- **Encrypted session cookies** (AES-256-GCM) — browser never stores GitHub tokens directly.
-
-## Environment Variables
+## Environment
 
 ```bash
-# Required in production
-SESSION_SECRET=           # or GITHUB_SESSION_SECRET — cookie encryption key
-
-# Optional overrides
 ALLOWED_ORIGIN=http://localhost:5173
-GITHUB_DEVICE_CLIENT_ID=  # defaults to bundled product GitHub App
-GITHUB_DEVICE_SCOPE=read:user
-ENABLE_GH_CLI_AUTH=1      # auto-enabled in non-production
+BRIDGE_PORT=8787
+GITHUB_DEVICE_CLIENT_ID=
+GITHUB_DEVICE_SCOPE=
 ```
+
+Notes:
+- default bridge origin for web dev is `http://localhost:5173`
+- bridge should stay usable without cloud env vars
+- production hosting is static web + local bridge, not server auth handlers
 
 ## Verification Checklist
 
-Before submitting changes, run:
+Before submit:
+
 ```bash
-bun run test    # 100% coverage required
-bun run check   # type check
-bun run build   # production build
+bun run test
+bun run check
+bun run build
 ```
+
+Manual:
+- start bridge
+- start web
+- pair
+- connect GitHub Copilot
+- load models
+- send prompt
+- confirm streamed response renders
+- logout and reconnect
