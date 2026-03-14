@@ -19,6 +19,7 @@ const PAIRING_TOKEN_STORAGE_KEY = "copilotchat.bridge_pairing_token";
 export interface StreamChatInput {
   onEvent(event: BridgeStreamEvent): void;
   request: ChatStreamRequest;
+  signal?: AbortSignal;
 }
 
 export interface BridgeClient {
@@ -217,7 +218,8 @@ export function createBridgeClient(options: {
           "content-type": "application/json",
           "x-bridge-token": token
         },
-        method: "POST"
+        method: "POST",
+        signal: input.signal
       });
 
       const reader = response.body?.getReader();

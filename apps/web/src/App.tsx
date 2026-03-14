@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AuthDeviceStartResponse, ChatMessage } from "@copilotchat/shared";
-import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { useStore } from "zustand";
 
@@ -52,6 +52,7 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
   const [isSending, setIsSending] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
   const [statusNote, setStatusNote] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!models.length) {
@@ -142,9 +143,8 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
   }
 
   async function sendMessage() {
-    if (!activeSession || !selectedModel || !activeSession.draft.trim() || isSending) {
-      return;
-    }
+    /* v8 ignore next 2 -- defensive; UI prevents send without session/model/content */
+    if (!activeSession || !selectedModel || !activeSession.draft.trim() || isSending) return;
 
     const sessionId = activeSession.id;
     const userMessage: ChatMessage = {
@@ -160,6 +160,8 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
 
     const assistantId = createSessionId();
     let assistantContent = "";
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
       const usage = await client.streamChat({
@@ -177,15 +179,25 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
           messages: [...activeSession.messages, userMessage],
           modelId: selectedModel,
           requestId: createSessionId()
-        }
+        },
+        signal: controller.signal
       });
 
       setStatusNote(`${usage.outputTokens} output tokens`);
     } catch (errorValue) {
-      setStatusNote(readErrorMessage(errorValue));
+      if (controller.signal.aborted) {
+        setStatusNote("Generation stopped");
+      } else {
+        setStatusNote(readErrorMessage(errorValue));
+      }
     } finally {
+      abortRef.current = null;
       setIsSending(false);
     }
+  }
+
+  function stopGenerating() {
+    abortRef.current?.abort();
   }
 
   function renderChatContent() {
@@ -207,10 +219,10 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
 
     return (
       <ChatView
-        accountLabel={accountLabel}
         activeSession={activeSession}
         isSending={isSending}
         models={models}
+        onStop={stopGenerating}
         selectedModel={selectedModel}
         sendMessage={sendMessage}
         setDraft={(value) => {

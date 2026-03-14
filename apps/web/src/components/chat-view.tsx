@@ -1,16 +1,14 @@
 import type { ChatMessage } from "@copilotchat/shared";
-import { MessageSquare, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { MessageSquare, Send, Square } from "lucide-react";
+import { useEffect, useRef } from "react";
 
-import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
-import { ScrollArea } from "./ui/scroll-area";
-import { Textarea } from "./ui/textarea";
+import { cn } from "../lib/utils";
 import { MessageBubble } from "./message-bubble";
+import { ModelSelector } from "./model-selector";
+import { Button } from "./ui/button";
+import { Textarea } from "./ui/textarea";
 
 export function ChatView(props: {
-  accountLabel: string;
   activeSession: {
     draft: string;
     id: string;
@@ -18,6 +16,7 @@ export function ChatView(props: {
   } | null;
   isSending: boolean;
   models: { id: string; label: string }[];
+  onStop?: () => void;
   selectedModel: string;
   sendMessage(): Promise<void>;
   setDraft(value: string): void;
@@ -25,113 +24,73 @@ export function ChatView(props: {
   statusNote: string;
 }) {
   const messages = props.activeSession?.messages ?? [];
-  const [modelQuery, setModelQuery] = useState("");
-  const selectedModel = props.models.find((model) => model.id === props.selectedModel) ?? null;
-  const normalizedModelQuery = modelQuery.trim().toLowerCase();
-  const filteredModels = useMemo(
-    () =>
-      props.models.filter((model) => {
-        if (!normalizedModelQuery) {
-          return true;
-        }
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScroll = useRef(true);
+  const selectedModelLabel =
+    props.models.find((m) => m.id === props.selectedModel)?.label ?? null;
 
-        return (
-          model.label.toLowerCase().includes(normalizedModelQuery) ||
-          model.id.toLowerCase().includes(normalizedModelQuery)
-        );
-      }),
-    [normalizedModelQuery, props.models]
-  );
+  // auto-scroll on new messages / streaming
+  useEffect(() => {
+    if (shouldAutoScroll.current && bottomRef.current) {
+      /* v8 ignore next -- jsdom has no scrollIntoView */
+      bottomRef.current.scrollIntoView?.({ behavior: "smooth" });
+    }
+  }, [messages]);
+
+  /* v8 ignore next 6 -- jsdom has no scroll geometry */
+  function handleScroll() {
+    const el = scrollAreaRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    shouldAutoScroll.current = distanceFromBottom < 80;
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      if (!props.isSending) {
+        void props.sendMessage();
+      }
+    }
+  }
+
+  const draft = props.activeSession?.draft ?? "";
+  const canSend = Boolean(draft.trim()) && Boolean(props.selectedModel) && !props.isSending;
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex flex-col gap-4 border-b px-6 py-4 xl:flex-row xl:items-start xl:justify-between">
-        <div className="flex items-center gap-3">
-          <h2 className="text-lg font-semibold tracking-tight">{props.accountLabel}</h2>
-          <Badge variant="success" className="font-mono text-[10px]">
-            {props.statusNote || "Ready for chat"}
-          </Badge>
-        </div>
-
-        <div className="w-full max-w-xl xl:min-w-[24rem]">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <span className="font-mono text-xs uppercase tracking-[0.24em] text-muted-foreground">Model</span>
-            {selectedModel ? (
-              <span className="truncate text-xs font-medium text-muted-foreground">{selectedModel.label}</span>
-            ) : null}
-          </div>
-
-          <div className="rounded-2xl border border-border/70 bg-card/70 p-2 shadow-sm backdrop-blur">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                aria-label="Search models"
-                className="h-11 rounded-xl border-transparent bg-background/80 pl-9 text-sm font-medium shadow-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0"
-                onChange={(event) => setModelQuery(event.target.value)}
-                placeholder={
-                  selectedModel ? `Search models. Current: ${selectedModel.label}` : "Search models"
-                }
-                value={modelQuery}
-              />
-            </div>
-
-            <ul aria-label="Model results" className="mt-2 grid max-h-48 gap-1 overflow-y-auto">
-              {filteredModels.length > 0 ? (
-                filteredModels.map((model) => {
-                  const isSelected = model.id === props.selectedModel;
-
-                  return (
-                    <li key={model.id}>
-                      <button
-                        className={[
-                          "flex w-full items-start justify-between gap-3 rounded-xl px-3 py-2 text-left transition-colors",
-                          isSelected
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-transparent hover:bg-accent hover:text-accent-foreground"
-                        ].join(" ")}
-                        onClick={() => {
-                          props.setSelectedModel(model.id);
-                          setModelQuery("");
-                        }}
-                        type="button"
-                      >
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-semibold">{model.label}</span>
-                          <span
-                            className={[
-                              "block truncate text-[11px]",
-                              isSelected ? "text-primary-foreground/80" : "text-muted-foreground"
-                            ].join(" ")}
-                          >
-                            {model.id}
-                          </span>
-                        </span>
-                        {isSelected ? (
-                          <span className="rounded-full border border-primary-foreground/20 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em]">
-                            Live
-                          </span>
-                        ) : null}
-                      </button>
-                    </li>
-                  );
-                })
-              ) : (
-                <li className="rounded-xl border border-dashed border-border/80 px-3 py-6 text-center text-sm text-muted-foreground">
-                  No models match.
-                </li>
-              )}
-            </ul>
-          </div>
-        </div>
+      {/* minimal header: model selector + status */}
+      <header className="flex items-center justify-between border-b px-4 py-2">
+        <ModelSelector
+          models={props.models}
+          selectedModel={props.selectedModel}
+          setSelectedModel={props.setSelectedModel}
+        />
+        {props.statusNote ? (
+          <span className="truncate text-xs text-muted-foreground max-w-[50%]">
+            {props.statusNote}
+          </span>
+        ) : null}
       </header>
 
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="px-6 py-6">
+      {/* message area */}
+      <div
+        ref={scrollAreaRef}
+        className="flex-1 min-h-0 overflow-y-auto"
+        onScroll={handleScroll}
+      >
+        <div className="px-4 py-6">
           {messages.length > 0 ? (
-            <div className="mx-auto flex max-w-3xl flex-col gap-5">
+            <div className="mx-auto flex max-w-3xl flex-col gap-6">
               {messages.map((message) => (
-                <MessageBubble key={message.id} message={message} />
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  modelLabel={selectedModelLabel}
+                />
               ))}
+              <div ref={bottomRef} />
             </div>
           ) : (
             <div className="flex min-h-[400px] flex-col items-center justify-center text-center">
@@ -145,29 +104,61 @@ export function ChatView(props: {
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
 
-      <footer className="border-t px-6 py-4">
+      {/* input area */}
+      <footer className="border-t px-4 py-3">
         <div className="mx-auto max-w-3xl">
-          <label className="sr-only" htmlFor="chat-input">
-            Message
-          </label>
-          <Textarea
-            id="chat-input"
-            aria-label="Message"
-            className="mb-3 min-h-[100px] resize-none"
-            onChange={(event) => props.setDraft(event.target.value)}
-            placeholder="Send a message..."
-            value={props.activeSession?.draft ?? ""}
-          />
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-muted-foreground">
-              {props.statusNote || "Streaming through local bridge."}
-            </p>
-            <Button disabled={props.isSending} onClick={() => void props.sendMessage()} size="sm">
-              {props.isSending ? "Sending..." : "Send"}
-            </Button>
+          <div className="relative">
+            <label className="sr-only" htmlFor="chat-input">
+              Message
+            </label>
+            <Textarea
+              id="chat-input"
+              aria-label="Message"
+              className={cn(
+                "min-h-[56px] max-h-[200px] resize-none pr-12 text-sm",
+                "rounded-xl border-border/60 bg-background",
+                "focus-visible:ring-1 focus-visible:ring-ring"
+              )}
+              onChange={(event) => props.setDraft(event.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Send a message..."
+              rows={1}
+              value={draft}
+            />
+            <div className="absolute bottom-2 right-2">
+              {props.isSending ? (
+                <Button
+                  aria-label="Stop generating"
+                  className="h-8 w-8 rounded-lg"
+                  onClick={props.onStop}
+                  size="icon"
+                  type="button"
+                  variant="destructive"
+                >
+                  <Square className="h-3.5 w-3.5" />
+                </Button>
+              ) : (
+                <Button
+                  aria-label="Send"
+                  className={cn(
+                    "h-8 w-8 rounded-lg",
+                    canSend ? "" : "opacity-40"
+                  )}
+                  disabled={!canSend}
+                  onClick={() => void props.sendMessage()}
+                  size="icon"
+                  type="button"
+                >
+                  <Send className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
           </div>
+          <p className="mt-1.5 text-center text-[11px] text-muted-foreground/60">
+            Streaming through local bridge. Shift+Enter for new line.
+          </p>
         </div>
       </footer>
     </div>

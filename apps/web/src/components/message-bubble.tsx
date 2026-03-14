@@ -1,47 +1,52 @@
 import type { ChatMessage } from "@copilotchat/shared";
 import { Bot, User } from "lucide-react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
 import { cn } from "../lib/utils";
 
-export function MessageBubble(props: { message: ChatMessage }) {
+export function MessageBubble(props: {
+  message: ChatMessage;
+  modelLabel?: string | null;
+}) {
   const isUser = props.message.role === "user";
+  const label = isUser ? "You" : (props.modelLabel ?? "Assistant");
+  const isStreaming = !isUser && !props.message.content;
 
   return (
-    <article
-      className={cn(
-        "flex gap-3 animate-fade-in",
-        isUser ? "flex-row-reverse" : "flex-row"
-      )}
-    >
-      <div
-        className={cn(
-          "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border mt-0.5",
-          isUser
-            ? "bg-primary text-primary-foreground"
-            : "bg-muted text-muted-foreground"
-        )}
-      >
-        {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
-      </div>
-
-      <div
-        className={cn(
-          "flex flex-col gap-1 max-w-[75%]",
-          isUser ? "items-end" : "items-start"
-        )}
-      >
-        <span className="text-xs font-medium text-muted-foreground font-mono uppercase tracking-wide">
-          {props.message.role}
-        </span>
+    <article className="animate-fade-in">
+      <div className="flex items-center gap-2 mb-1.5">
         <div
           className={cn(
-            "rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap",
+            "flex h-6 w-6 shrink-0 items-center justify-center rounded-full",
             isUser
-              ? "bg-primary text-primary-foreground rounded-tr-sm"
-              : "bg-muted text-foreground rounded-tl-sm"
+              ? "bg-primary text-primary-foreground"
+              : "bg-muted text-muted-foreground"
           )}
         >
-          <p className="m-0">{props.message.content}</p>
+          {isUser ? <User className="h-3 w-3" /> : <Bot className="h-3 w-3" />}
         </div>
+        <span className="text-sm font-semibold">{label}</span>
+      </div>
+
+      <div className="pl-8">
+        {isStreaming ? (
+          <div className="flex items-center gap-1 py-2">
+            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-pulse" />
+            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-pulse [animation-delay:0.2s]" />
+            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-pulse [animation-delay:0.4s]" />
+          </div>
+        ) : isUser ? (
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">
+            {props.message.content}
+          </p>
+        ) : (
+          <div className="prose prose-sm dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-muted prose-pre:border prose-pre:border-border prose-code:before:content-none prose-code:after:content-none prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-sm">
+            <Markdown remarkPlugins={[remarkGfm]}>
+              {props.message.content}
+            </Markdown>
+          </div>
+        )}
       </div>
     </article>
   );
