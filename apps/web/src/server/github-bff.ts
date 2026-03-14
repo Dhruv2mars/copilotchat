@@ -667,18 +667,29 @@ async function probeReachableModels(input: {
   token: string;
 }) {
   const reachableModels: ListedModel[] = [];
+  let firstProbeError: Error | null = null;
 
   for (const model of input.models) {
-    if (
-      await probeModelAccess({
-        fetchFn: input.fetchFn,
-        modelId: model.id,
-        modelsBaseUrl: input.modelsBaseUrl,
-        token: input.token
-      })
-    ) {
-      reachableModels.push(model);
+    try {
+      if (
+        await probeModelAccess({
+          fetchFn: input.fetchFn,
+          modelId: model.id,
+          modelsBaseUrl: input.modelsBaseUrl,
+          token: input.token
+        })
+      ) {
+        reachableModels.push(model);
+      }
+    } catch (errorValue) {
+      if (!firstProbeError) {
+        firstProbeError = errorValue instanceof Error ? errorValue : new Error("github_models_request_failed");
+      }
     }
+  }
+
+  if (!reachableModels.length && firstProbeError) {
+    throw firstProbeError;
   }
 
   return reachableModels;
