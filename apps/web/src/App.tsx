@@ -43,6 +43,7 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
   const bootstrap = bootstrapQuery.data ?? null;
   const models = bootstrap?.models ?? [];
   const availableModels = models.filter((model) => model.availability === "available");
+  const bridgePermission = bootstrap?.bridge.permission;
   const isBridgeReachable = bootstrap?.bridge.reachable ?? false;
   const isReady = Boolean(bootstrap?.auth.authenticated);
   const accountLabel = bootstrap?.auth.accountLabel ?? "GitHub Copilot";
@@ -50,6 +51,7 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
 
   const [deviceAuth, setDeviceAuth] = useState<AuthDeviceStartResponse | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isGrantingBridgeAccess, setIsGrantingBridgeAccess] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
   const [statusNote, setStatusNote] = useState("");
@@ -123,6 +125,26 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
       setStatusNote(readErrorMessage(errorValue));
     } finally {
       setIsConnecting(false);
+    }
+  }
+
+  async function requestBridgeAccess() {
+    setIsGrantingBridgeAccess(true);
+
+    try {
+      const next = await client.requestBridgeAccess();
+      queryClient.setQueryData(["bootstrap"], next);
+      setStatusNote(
+        next.bridge.permission === "denied"
+          ? "Browser blocked local bridge access"
+          : next.bridge.reachable
+            ? "Local bridge access granted"
+            : "Local bridge still offline"
+      );
+    } catch (errorValue) {
+      setStatusNote(readErrorMessage(errorValue));
+    } finally {
+      setIsGrantingBridgeAccess(false);
     }
   }
 
@@ -209,9 +231,12 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
     if (runtime !== "ready") {
       return (
         <AuthView
+          bridgePermission={bridgePermission}
           bridgeReachable={isBridgeReachable}
           deviceAuth={deviceAuth}
           isConnecting={isConnecting}
+          isGrantingBridgeAccess={isGrantingBridgeAccess}
+          requestBridgeAccess={requestBridgeAccess}
           startDeviceAuth={connectGitHub}
           statusNote={statusNote}
         />
@@ -240,7 +265,15 @@ function Shell({ client, store }: { client: BridgeClient; store: AppStore }) {
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar
-        accountLabel={runtime === "ready" ? accountLabel : isBridgeReachable ? "GitHub Copilot" : "Bridge offline"}
+        accountLabel={
+          runtime === "ready"
+            ? accountLabel
+            : bridgePermission === "prompt"
+              ? "Grant bridge access"
+              : isBridgeReachable
+                ? "GitHub Copilot"
+                : "Bridge offline"
+        }
         activeSessionId={runtime === "ready" ? activeSessionId : null}
         filteredSessions={runtime === "ready" ? filteredSessions : []}
         logout={logout}
@@ -288,6 +321,10 @@ function readErrorMessage(errorValue: unknown) {
 function friendlyError(error: string) {
   if (error === "auth_flow_not_found") {
     return "Bridge auth flow expired. Start sign-in again.";
+  }
+
+  if (error === "loopback_permission_denied") {
+    return "Browser blocked local bridge access";
   }
 
   if (error === "bridge_request_failed") {

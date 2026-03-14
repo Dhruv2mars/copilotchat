@@ -7,7 +7,7 @@ export function LoadingView() {
       <div className="text-center space-y-1">
         <h2 className="text-lg font-semibold tracking-tight">Loading session</h2>
         <p className="text-sm text-muted-foreground">
-          Checking your hosted GitHub session and loading the model catalog.
+          Checking bridge access, auth state, and the model catalog.
         </p>
       </div>
     </div>

@@ -227,7 +227,13 @@ describe("bridge-client", () => {
       models: []
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://127.0.0.1:8787/health", undefined);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:8787/health",
+      expect.objectContaining({
+        targetAddressSpace: "local"
+      })
+    );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "http://127.0.0.1:8787/pair/start",
@@ -253,7 +259,13 @@ describe("bridge-client", () => {
     const client = createBridgeClient({
       baseUrl: "http://127.0.0.1:8787",
       fetchFn: vi.fn().mockRejectedValue(new TypeError("fetch failed")),
+      isSecureContext: true,
       origin: "http://localhost:5173",
+      permissions: {
+        query: vi.fn().mockResolvedValue({
+          state: "granted"
+        })
+      },
       storage: sessionStorage
     });
 
@@ -269,6 +281,183 @@ describe("bridge-client", () => {
       },
       models: []
     });
+  });
+
+  it("surfaces loopback permission before passive prod bootstrap", async () => {
+    const fetchMock = vi.fn();
+    const client = createBridgeClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchFn: fetchMock,
+      isSecureContext: true,
+      origin: "https://copilotchat.vercel.app",
+      permissions: {
+        query: vi.fn().mockResolvedValue({
+          state: "prompt"
+        })
+      },
+      storage: sessionStorage
+    });
+
+    await expect(client.bootstrap()).resolves.toEqual({
+      auth: {
+        accountLabel: null,
+        authenticated: false,
+        provider: "github-copilot"
+      },
+      bridge: {
+        paired: false,
+        permission: "prompt",
+        reachable: false
+      },
+      models: []
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("requests bridge access explicitly on hosted prod", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          auth: {
+            accountLabel: null,
+            authenticated: false,
+            provider: "github-copilot"
+          },
+          bridgeVersion: "2.0.0",
+          protocolVersion: "2026-03-13",
+          status: "ok"
+        })
+      )
+    );
+    const client = createBridgeClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchFn: fetchMock,
+      isSecureContext: true,
+      origin: "https://copilotchat.vercel.app",
+      permissions: {
+        query: vi.fn().mockResolvedValue({
+          state: "prompt"
+        })
+      },
+      storage: sessionStorage
+    });
+
+    await expect(client.requestBridgeAccess()).resolves.toEqual({
+      auth: {
+        accountLabel: null,
+        authenticated: false,
+        provider: "github-copilot"
+      },
+      bridge: {
+        bridgeVersion: "2.0.0",
+        paired: false,
+        protocolVersion: "2026-03-13",
+        reachable: true
+      },
+      models: []
+    });
+  });
+
+  it("falls back when loopback permission names are unsupported", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    const client = createBridgeClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchFn: fetchMock,
+      isSecureContext: true,
+      origin: "https://copilotchat.vercel.app",
+      permissions: {
+        query: vi.fn().mockRejectedValue(new TypeError("unsupported_permission_name"))
+      },
+      storage: sessionStorage
+    });
+
+    await expect(client.bootstrap()).resolves.toEqual({
+      auth: {
+        accountLabel: null,
+        authenticated: false,
+        provider: "github-copilot"
+      },
+      bridge: {
+        paired: false,
+        reachable: false
+      },
+      models: []
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8787/health",
+      expect.objectContaining({
+        targetAddressSpace: "local"
+      })
+    );
+  });
+
+  it("falls back when the browser has no permissions api", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    const client = createBridgeClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchFn: fetchMock,
+      isSecureContext: true,
+      origin: "https://copilotchat.vercel.app",
+      storage: sessionStorage
+    });
+
+    await expect(client.bootstrap()).resolves.toEqual({
+      auth: {
+        accountLabel: null,
+        authenticated: false,
+        provider: "github-copilot"
+      },
+      bridge: {
+        paired: false,
+        reachable: false
+      },
+      models: []
+    });
+  });
+
+  it("does not attach loopback address space for non-loopback bridges", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          auth: {
+            accountLabel: null,
+            authenticated: false,
+            provider: "github-copilot"
+          },
+          bridgeVersion: "2.0.0",
+          protocolVersion: "2026-03-13",
+          status: "ok"
+        })
+      )
+    );
+    const client = createBridgeClient({
+      baseUrl: "https://bridge.example.com",
+      fetchFn: fetchMock,
+      isSecureContext: true,
+      origin: "https://copilotchat.vercel.app",
+      permissions: {
+        query: vi.fn().mockResolvedValue({
+          state: "granted"
+        })
+      },
+      storage: sessionStorage
+    });
+
+    await expect(client.bootstrap()).resolves.toEqual({
+      auth: {
+        accountLabel: null,
+        authenticated: false,
+        provider: "github-copilot"
+      },
+      bridge: {
+        bridgeVersion: "2.0.0",
+        paired: false,
+        protocolVersion: "2026-03-13",
+        reachable: true
+      },
+      models: []
+    });
+    expect(fetchMock).toHaveBeenCalledWith("https://bridge.example.com/health", undefined);
   });
 
   it("maps structured and fallback request errors", async () => {

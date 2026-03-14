@@ -11,6 +11,7 @@ export function DiagnosticsView(props: {
     { label: "Runtime", value: props.runtime },
     { label: "Account", value: props.accountLabel },
     { label: "Bridge", value: props.bridgeState.reachable ? "reachable" : "offline" },
+    { label: "Bridge access", value: props.bridgeState.permission ?? "n/a" },
     { label: "Paired", value: props.bridgeState.paired ? "yes" : "no" },
     { label: "Bridge version", value: props.bridgeState.bridgeVersion ?? "unknown" },
     { label: "Protocol", value: props.bridgeState.protocolVersion ?? "unknown" },

@@ -98,6 +98,7 @@ function createBaseClient(overrides: Partial<BridgeClient> = {}): BridgeClient {
     bootstrap: vi.fn().mockResolvedValue(createSignedOutBootstrap()),
     logout: vi.fn().mockResolvedValue(createSignedOutBootstrap()),
     pollDeviceAuth: vi.fn(),
+    requestBridgeAccess: vi.fn().mockResolvedValue(createSignedOutBootstrap()),
     startDeviceAuth: vi.fn(),
     streamChat: vi.fn(),
     ...overrides
@@ -115,6 +116,96 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Bridge offline" })).toBeInTheDocument();
     expect(screen.getByText("Start the local bridge on your machine to continue.")).toBeInTheDocument();
     expect(screen.getByText("Offline")).toBeInTheDocument();
+  });
+
+  it("requests local bridge access before connect on the hosted app", async () => {
+    const client = createBaseClient({
+      bootstrap: vi.fn().mockResolvedValue({
+        ...createOfflineBootstrap(),
+        bridge: {
+          paired: false,
+          permission: "prompt",
+          reachable: false
+        }
+      }),
+      requestBridgeAccess: vi.fn().mockResolvedValue(createSignedOutBootstrap())
+    });
+
+    renderApp(client);
+
+    const user = userEvent.setup();
+    expect(await screen.findByRole("heading", { name: "Allow local bridge access" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Allow local bridge access" }));
+
+    expect(client.requestBridgeAccess).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("heading", { name: "Connect GitHub Copilot" })).toBeInTheDocument();
+  });
+
+  it("keeps bridge access guidance when the local bridge stays offline", async () => {
+    const client = createBaseClient({
+      bootstrap: vi.fn().mockResolvedValue({
+        ...createOfflineBootstrap(),
+        bridge: {
+          paired: false,
+          permission: "prompt",
+          reachable: false
+        }
+      }),
+      requestBridgeAccess: vi.fn().mockResolvedValue(createOfflineBootstrap())
+    });
+
+    renderApp(client);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Allow local bridge access" }));
+    expect(await screen.findByText("Local bridge still offline")).toBeInTheDocument();
+  });
+
+  it("surfaces loopback permission denial from the browser", async () => {
+    const client = createBaseClient({
+      bootstrap: vi.fn().mockResolvedValue({
+        ...createOfflineBootstrap(),
+        bridge: {
+          paired: false,
+          permission: "prompt",
+          reachable: false
+        }
+      }),
+      requestBridgeAccess: vi.fn().mockRejectedValue(new Error("loopback_permission_denied"))
+    });
+
+    renderApp(client);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Allow local bridge access" }));
+    expect(await screen.findAllByText("Browser blocked local bridge access")).not.toHaveLength(0);
+  });
+
+  it("shows blocked bridge access when the browser denies the permission request", async () => {
+    const client = createBaseClient({
+      bootstrap: vi.fn().mockResolvedValue({
+        ...createOfflineBootstrap(),
+        bridge: {
+          paired: false,
+          permission: "prompt",
+          reachable: false
+        }
+      }),
+      requestBridgeAccess: vi.fn().mockResolvedValue({
+        ...createOfflineBootstrap(),
+        bridge: {
+          paired: false,
+          permission: "denied",
+          reachable: false
+        }
+      })
+    });
+
+    renderApp(client);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Allow local bridge access" }));
+    expect(await screen.findByRole("heading", { name: "Bridge access blocked" })).toBeInTheDocument();
   });
 
   it("connects GitHub Copilot, streams chat, supports diagnostics, and logs out", async () => {
