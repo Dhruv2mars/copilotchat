@@ -75,8 +75,6 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
     });
   }, [activeSessionId, isReady, store]);
 
-  const runtime: RuntimeState = bootstrapQuery.isPending ? "loading" : isReady ? "ready" : "signed_out";
-
   const filteredSessions = useMemo(
     () =>
       sessions.filter((session) =>
@@ -84,6 +82,11 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
       ),
     [deferredSearch, sessions]
   );
+
+  const runtime: RuntimeState = bootstrapQuery.isPending ? "loading" : isReady ? "ready" : "signed_out";
+  const sidebarSessions = runtime === "ready" ? filteredSessions : [];
+  const sidebarSessionSearch = runtime === "ready" ? sessionSearch : "";
+  const sidebarActiveSessionId = runtime === "ready" ? activeSessionId : null;
 
   async function authWithCli() {
     try {
@@ -151,6 +154,11 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
     try {
       const next = await client.logout();
       queryClient.setQueryData(["bootstrap"], next);
+      store.setState({
+        activeSessionId: null,
+        sessionSearch: "",
+        sessions: []
+      });
       setStatusNote("Signed out");
     } catch (errorValue) {
       setStatusNote(readErrorMessage(errorValue));
@@ -199,11 +207,11 @@ function Shell({ client, store }: { client: BffClient; store: AppStore }) {
     <div className="flex h-screen overflow-hidden">
       <Sidebar
         accountLabel={accountLabel}
-        activeSessionId={activeSessionId}
-        filteredSessions={filteredSessions}
+        activeSessionId={sidebarActiveSessionId}
+        filteredSessions={sidebarSessions}
         logout={logout}
         runtime={runtime}
-        sessionSearch={sessionSearch}
+        sessionSearch={sidebarSessionSearch}
         setSessionSearch={(value) => store.getState().setSessionSearch(value)}
         startNewThread={() => startTransition(() => store.getState().createSession(createSessionId()))}
         statusNote={statusNote}
