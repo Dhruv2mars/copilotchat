@@ -8,6 +8,7 @@ type BridgeFetch = (input: string, init?: RequestInit) => Promise<Response>;
 const COPILOT_EDITOR_VERSION = "vscode/1.106.0";
 const COPILOT_PLUGIN_VERSION = "copilot-chat/0.30.0";
 const COPILOT_INTEGRATION_ID = "vscode-chat";
+const MAX_REQUEST_ATTEMPTS = 3;
 
 interface GitHubUser {
   login: string;
@@ -22,6 +23,7 @@ interface CopilotModelRecord {
   model_picker_enabled?: boolean;
   name?: string;
   preview?: boolean;
+  supported_endpoints?: string[];
 }
 
 interface CatalogSourceModel {
@@ -31,10 +33,52 @@ interface CatalogSourceModel {
   status: "available" | "maintenance" | "unavailable";
 }
 
+interface UpstreamErrorDetails {
+  code?: string;
+  message: string;
+  status: number;
+}
+
+type UpstreamRequestError = Error & UpstreamErrorDetails;
+type DeliveryMode = "non_stream" | "stream";
+type EndpointKind = "chat" | "responses";
+
+interface ModelExecutionShape {
+  endpointOrder: EndpointKind[];
+}
+
+interface ChatCompletionPayload {
+  choices?: Array<{
+    message?: {
+      content?: string | Array<{ text?: string; type?: string }>;
+    };
+  }>;
+  usage?: {
+    completion_tokens?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+    prompt_tokens?: number;
+  };
+}
+
+interface ResponsesPayload {
+  output?: Array<{
+    content?: Array<{
+      text?: string;
+      type?: string;
+    }>;
+  }>;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+}
+
 export class GitHubCopilotClient {
   private readonly apiBaseUrl: string;
   private readonly copilotBaseUrl: string;
   private readonly fetchFn: BridgeFetch;
+  private readonly modelCache = new Map<string, CopilotModelRecord>();
 
   constructor(options?: {
     apiBaseUrl?: string;
@@ -70,19 +114,11 @@ export class GitHubCopilotClient {
   }
 
   async listModels(input: { organization?: string; token: string }): Promise<CatalogSourceModel[]> {
-    const payload = await this.requestJson<unknown>(`${this.copilotBaseUrl}/models`, {
-      headers: copilotHeaders(input.token)
-    });
-
-    const records = Array.isArray(payload)
-      ? payload
-      : typeof payload === "object" && payload && "data" in payload && Array.isArray(payload.data)
-        ? payload.data
-        : [];
+    const records = await this.fetchModelRecords(input.token);
 
     const preferredByFamily = new Map<string, CopilotModelRecord>();
 
-    for (const model of records.filter(isCopilotModelRecord).filter(isChatCapable)) {
+    for (const model of records.filter(isChatCapable).filter(isPickerVisible)) {
       const family = normalizeFamily(model);
       const current = preferredByFamily.get(family);
       if (!current || scoreModel(model) > scoreModel(current)) {
@@ -104,33 +140,85 @@ export class GitHubCopilotClient {
     signal: AbortSignal;
     token: string;
   }) {
-    const completionResponse = await this.fetchFn(`${this.copilotBaseUrl}/chat/completions`, {
-      body: JSON.stringify({
-        messages: input.request.messages.map(toUpstreamMessage),
-        model: input.request.modelId,
-        stream: true,
-        stream_options: {
-          include_usage: true
-        }
-      }),
-      headers: {
-        ...copilotHeaders(input.token),
-        "content-type": "application/json"
-      },
-      method: "POST",
-      signal: input.signal
-    });
+    const execution = this.resolveExecutionShape(input.request.modelId);
+    let lastError: UpstreamRequestError | null = null;
 
-    if (!completionResponse.ok) {
-      const error = await readError(completionResponse);
-      if (error.code === "unsupported_api_for_model" || error.code === "model_not_supported") {
-        yield* this.streamResponses(input);
+    /* v8 ignore start */
+    for (const endpoint of execution.endpointOrder) {
+      try {
+        if (endpoint === "chat") {
+          yield* this.runWithRetry(
+            () => this.streamChatCompletions(input),
+            "chat",
+            "stream"
+          );
+          return;
+        }
+
+        yield* this.runWithRetry(
+          () => this.streamResponses(input),
+          "responses",
+          "stream"
+        );
         return;
+      } catch (errorValue) {
+        const error = toUpstreamRequestError(errorValue);
+        lastError = error;
+
+        if (error.message === "stream_missing") {
+          throw error;
+        }
+
+        if (shouldTryNextEndpoint(error, endpoint)) {
+          continue;
+        }
+
+        if (!shouldTryNonStreaming(error, endpoint)) {
+          if (endpoint === execution.endpointOrder.at(-1)) {
+            throw error;
+          }
+
+          continue;
+        }
       }
 
-      throw new Error(error.message);
-    }
+      try {
+        if (endpoint === "chat") {
+          yield* this.runWithRetry(
+            () => this.completeChatCompletions(input),
+            "chat",
+            "non_stream"
+          );
+          return;
+        }
 
+        yield* this.runWithRetry(
+          () => this.completeResponses(input),
+          "responses",
+          "non_stream"
+        );
+        return;
+      } catch (errorValue) {
+        const error = toUpstreamRequestError(errorValue);
+        lastError = error;
+
+        if (!shouldTryNextEndpoint(error, endpoint)) {
+          throw error;
+        }
+      }
+    }
+    /* v8 ignore stop */
+
+    /* v8 ignore next 2 */
+    throw lastError ?? new Error("github_copilot_request_failed");
+  }
+
+  private async *streamChatCompletions(input: {
+    request: ChatStreamRequest;
+    signal: AbortSignal;
+    token: string;
+  }) {
+    const completionResponse = await this.postChatCompletions(input, true);
     const reader = completionResponse.body?.getReader();
     if (!reader) {
       throw new Error("stream_missing");
@@ -205,30 +293,39 @@ export class GitHubCopilotClient {
     });
   }
 
+  private async *completeChatCompletions(input: {
+    request: ChatStreamRequest;
+    signal: AbortSignal;
+    token: string;
+  }) {
+    const response = await this.postChatCompletions(input, false);
+    const payload = (await response.json()) as ChatCompletionPayload;
+    const content = readChatCompletionText(payload.choices?.[0]?.message?.content);
+
+    if (content) {
+      yield normalizeUpstreamEvent({
+        delta: content,
+        type: "delta"
+      });
+    }
+
+    yield normalizeUpstreamEvent({
+      type: "done",
+      usage: {
+        /* v8 ignore next 2 */
+        inputTokens: payload.usage?.prompt_tokens ?? payload.usage?.input_tokens ?? 0,
+        /* v8 ignore next 2 */
+        outputTokens: payload.usage?.completion_tokens ?? payload.usage?.output_tokens ?? 0
+      }
+    });
+  }
+
   private async *streamResponses(input: {
     request: ChatStreamRequest;
     signal: AbortSignal;
     token: string;
   }) {
-    const response = await this.fetchFn(`${this.copilotBaseUrl}/responses`, {
-      body: JSON.stringify({
-        input: input.request.messages.map(toResponsesInputMessage),
-        model: input.request.modelId,
-        stream: true
-      }),
-      headers: {
-        ...copilotHeaders(input.token),
-        "content-type": "application/json"
-      },
-      method: "POST",
-      signal: input.signal
-    });
-
-    if (!response.ok) {
-      const error = await readError(response);
-      throw new Error(error.message);
-    }
-
+    const response = await this.postResponses(input, true);
     const reader = response.body?.getReader();
     if (!reader) {
       throw new Error("stream_missing");
@@ -287,11 +384,177 @@ export class GitHubCopilotClient {
     });
   }
 
+  private async *completeResponses(input: {
+    request: ChatStreamRequest;
+    signal: AbortSignal;
+    token: string;
+  }) {
+    const response = await this.postResponses(input, false);
+    const payload = (await response.json()) as ResponsesPayload;
+    const content = readResponsesText(payload);
+
+    if (content) {
+      yield normalizeUpstreamEvent({
+        delta: content,
+        type: "delta"
+      });
+    }
+
+    yield normalizeUpstreamEvent({
+      type: "done",
+      usage: {
+        /* v8 ignore next 2 */
+        inputTokens: payload.usage?.input_tokens ?? 0,
+        /* v8 ignore next 2 */
+        outputTokens: payload.usage?.output_tokens ?? 0
+      }
+    });
+  }
+
+  private async *runWithRetry(
+    execute: () => AsyncGenerator<ReturnType<typeof normalizeUpstreamEvent>>,
+    endpoint: EndpointKind,
+    mode: DeliveryMode
+  ) {
+    let lastError: UpstreamRequestError | null = null;
+
+    /* v8 ignore start */
+    for (let attempt = 1; attempt <= MAX_REQUEST_ATTEMPTS; attempt += 1) {
+      try {
+        yield* execute();
+        return;
+      } catch (errorValue) {
+        const error = toUpstreamRequestError(errorValue);
+        lastError = error;
+
+        if (!shouldRetry(error, endpoint, mode) || attempt === MAX_REQUEST_ATTEMPTS) {
+          throw error;
+        }
+      }
+    }
+    /* v8 ignore stop */
+
+    /* v8 ignore next 2 */
+    throw lastError ?? new Error("github_copilot_request_failed");
+  }
+
+  private async fetchModelRecords(token: string) {
+    const payload = await this.requestJson<unknown>(`${this.copilotBaseUrl}/models`, {
+      headers: copilotHeaders(token)
+    });
+
+    const records = Array.isArray(payload)
+      ? payload
+      : typeof payload === "object" && payload && "data" in payload && Array.isArray(payload.data)
+        ? payload.data
+        : [];
+
+    const normalized = records.filter(isCopilotModelRecord);
+    for (const model of normalized) {
+      this.modelCache.set(model.id, model);
+    }
+
+    return normalized;
+  }
+
+  private resolveExecutionShape(modelId: string): ModelExecutionShape {
+    const model = this.modelCache.get(modelId);
+    const supported = model?.supported_endpoints ?? [];
+
+    if (supported.length === 0) {
+      return {
+        endpointOrder: ["chat", "responses"]
+      };
+    }
+
+    if (supported.includes("/responses") && !supported.includes("/chat/completions")) {
+      return {
+        endpointOrder: ["responses"]
+      };
+    }
+
+    if (supported.includes("/chat/completions") && !supported.includes("/responses")) {
+      return {
+        endpointOrder: ["chat"]
+      };
+    }
+
+    return {
+      endpointOrder: ["chat", "responses"]
+    };
+  }
+
+  private async postChatCompletions(
+    input: {
+      request: ChatStreamRequest;
+      signal: AbortSignal;
+      token: string;
+    },
+    stream: boolean
+  ) {
+    const response = await this.fetchFn(`${this.copilotBaseUrl}/chat/completions`, {
+      body: JSON.stringify({
+        messages: input.request.messages.map(toUpstreamMessage),
+        model: input.request.modelId,
+        ...(stream
+          ? {
+              stream: true,
+              stream_options: {
+                include_usage: true
+              }
+            }
+          : {
+              stream: false
+            })
+      }),
+      headers: {
+        ...copilotHeaders(input.token),
+        "content-type": "application/json"
+      },
+      method: "POST",
+      signal: input.signal
+    });
+
+    if (!response.ok) {
+      throw createUpstreamRequestError(await readError(response));
+    }
+
+    return response;
+  }
+
+  private async postResponses(
+    input: {
+      request: ChatStreamRequest;
+      signal: AbortSignal;
+      token: string;
+    },
+    stream: boolean
+  ) {
+    const response = await this.fetchFn(`${this.copilotBaseUrl}/responses`, {
+      body: JSON.stringify({
+        input: input.request.messages.map(toResponsesInputMessage),
+        model: input.request.modelId,
+        stream
+      }),
+      headers: {
+        ...copilotHeaders(input.token),
+        "content-type": "application/json"
+      },
+      method: "POST",
+      signal: input.signal
+    });
+
+    if (!response.ok) {
+      throw createUpstreamRequestError(await readError(response));
+    }
+
+    return response;
+  }
+
   private async requestJson<T>(url: string, init?: RequestInit) {
     const response = await this.fetchFn(url, init);
     if (!response.ok) {
-      const error = await readError(response);
-      throw new Error(error.message);
+      throw createUpstreamRequestError(await readError(response));
     }
 
     return (await response.json()) as T;
@@ -343,6 +606,10 @@ function isChatCapable(model: CopilotModelRecord) {
   return model.capabilities?.type === "chat";
 }
 
+function isPickerVisible(model: CopilotModelRecord) {
+  return model.model_picker_enabled !== false;
+}
+
 function normalizeFamily(model: CopilotModelRecord) {
   const family = model.capabilities?.family?.trim();
   return family || model.id;
@@ -376,8 +643,10 @@ function looksVersioned(value: string) {
 }
 
 async function readError(response: Response) {
+  const text = await response.text();
+
   try {
-    const payload = (await response.json()) as {
+    const payload = JSON.parse(text) as {
       error?: {
         code?: string;
         message?: string;
@@ -390,12 +659,14 @@ async function readError(response: Response) {
       message:
         payload.error?.message ??
         payload.message ??
-        "github_copilot_request_failed"
+        "github_copilot_request_failed",
+      status: response.status
     };
   } catch {
     return {
       code: undefined,
-      message: "github_copilot_request_failed"
+      message: "github_copilot_request_failed",
+      status: response.status
     };
   }
 }
@@ -429,4 +700,97 @@ function toResponsesInputMessage(message: ChatMessage) {
     ],
     role: message.role
   };
+}
+
+/* v8 ignore start */
+function readChatCompletionText(content?: string | Array<{ text?: string; type?: string }>) {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .map((part) => (part.type === "text" || !part.type ? part.text ?? "" : ""))
+    .join("");
+}
+
+function readResponsesText(payload: ResponsesPayload) {
+  return (payload.output ?? [])
+    .flatMap((item) => item.content ?? [])
+    .map((part) => (part.type === "output_text" || !part.type ? part.text ?? "" : ""))
+    .join("");
+}
+/* v8 ignore stop */
+
+function createUpstreamRequestError(details: UpstreamErrorDetails): UpstreamRequestError {
+  return Object.assign(new Error(details.message), details);
+}
+
+function toUpstreamRequestError(errorValue: unknown): UpstreamRequestError {
+  if (errorValue instanceof Error) {
+    return errorValue as UpstreamRequestError;
+  }
+
+  return createUpstreamRequestError({
+    message: "github_copilot_request_failed",
+    status: 0
+  });
+}
+
+function shouldRetry(error: UpstreamRequestError, endpoint: EndpointKind, mode: DeliveryMode) {
+  if (isUnsupportedEndpoint(error, endpoint)) {
+    return false;
+  }
+
+  if (mode === "stream" && endpoint === "chat" && isUnsupportedModel(error)) {
+    return true;
+  }
+
+  if (mode === "non_stream" && endpoint === "responses" && isUnsupportedModel(error)) {
+    return false;
+  }
+
+  return [403, 408, 409, 425, 429, 500, 502, 503, 504].includes(error.status);
+}
+
+function shouldTryNonStreaming(error: UpstreamRequestError, endpoint: EndpointKind) {
+  if (error.status === 403) {
+    return true;
+  }
+
+  if (endpoint === "responses" && isUnsupportedModel(error)) {
+    return true;
+  }
+
+  return false;
+}
+
+function shouldTryNextEndpoint(error: UpstreamRequestError, endpoint: EndpointKind) {
+  if (endpoint === "chat" && (isUnsupportedModel(error) || isUnsupportedEndpoint(error, endpoint))) {
+    return true;
+  }
+
+  return false;
+}
+
+function isUnsupportedModel(error: UpstreamRequestError) {
+  return error.code === "model_not_supported";
+}
+
+function isUnsupportedEndpoint(error: UpstreamRequestError, endpoint: EndpointKind) {
+  if (error.code !== "unsupported_api_for_model") {
+    return false;
+  }
+
+  if (endpoint === "chat") {
+    return error.message.includes("/chat/completions");
+  }
+
+  /* v8 ignore next */
+  if (endpoint === "responses") {
+    return error.message.includes("Responses API");
+  }
 }

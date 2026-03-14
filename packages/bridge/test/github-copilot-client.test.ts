@@ -390,6 +390,32 @@ describe("GitHubCopilotClient", () => {
         )
         .mockResolvedValueOnce(
           new Response(
+            JSON.stringify({
+              error: {
+                code: "model_not_supported",
+                message: "The requested model is not supported."
+              }
+            }),
+            {
+              status: 400
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "model_not_supported",
+                message: "The requested model is not supported."
+              }
+            }),
+            {
+              status: 400
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
             new ReadableStream({
               start(controller) {
                 controller.enqueue(
@@ -443,6 +469,78 @@ describe("GitHubCopilotClient", () => {
             }),
             {
               status: 400
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "responses_forbidden"
+              }
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "responses_forbidden"
+              }
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "responses_forbidden"
+              }
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "responses_forbidden"
+              }
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "responses_forbidden"
+              }
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "responses_forbidden"
+              }
+            }),
+            {
+              status: 403
             }
           )
         )
@@ -571,6 +669,78 @@ describe("GitHubCopilotClient", () => {
           new Response(
             JSON.stringify({
               message: "viewer_forbidden"
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "chat_forbidden"
+              }
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "chat_forbidden"
+              }
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "chat_forbidden"
+              }
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "chat_forbidden"
+              }
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "chat_forbidden"
+              }
+            }),
+            {
+              status: 403
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "chat_forbidden"
+              }
             }),
             {
               status: 403
@@ -807,6 +977,845 @@ describe("GitHubCopilotClient", () => {
         status: "available"
       }
     ]);
+  });
+
+  it("skips picker-disabled family aliases when selecting models", async () => {
+    const client = new GitHubCopilotClient({
+      fetchFn: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  family: "claude-sonnet-4.5",
+                  type: "chat"
+                },
+                id: "claude-sonnet-4.5",
+                model_picker_enabled: false,
+                name: "Claude Sonnet 4.5"
+              },
+              {
+                capabilities: {
+                  family: "claude-sonnet-4.5",
+                  type: "chat"
+                },
+                id: "claude-sonnet-4.5-2025-02-20",
+                model_picker_enabled: true,
+                name: "Claude Sonnet 4.5"
+              }
+            ]
+          })
+        )
+      )
+    });
+
+    await expect(
+      client.listModels({
+        token: "ghp_1234567890"
+      })
+    ).resolves.toEqual([
+      {
+        capabilities: ["chat"],
+        id: "claude-sonnet-4.5-2025-02-20",
+        label: "Claude Sonnet 4.5",
+        status: "available"
+      }
+    ]);
+  });
+
+  it("retries transient chat stream failures and falls back to non-stream completions", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  family: "gpt-4o",
+                  type: "chat"
+                },
+                id: "gpt-4o",
+                model_picker_enabled: true,
+                name: "GPT-4o"
+              }
+            ]
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: "The capital city of India is New Delhi."
+                }
+              }
+            ],
+            usage: {
+              completion_tokens: 10,
+              prompt_tokens: 12
+            }
+          })
+        )
+      );
+
+    const client = new GitHubCopilotClient({
+      fetchFn: fetchMock,
+      copilotBaseUrl: "https://api.githubcopilot.test"
+    });
+
+    await client.listModels({
+      token: "ghp_1234567890"
+    });
+
+    const events: Array<{ type: string; value?: string }> = [];
+    for await (const event of client.streamChat({
+      request: {
+        messages: [
+          {
+            content: "indian capital city?",
+            id: "m1",
+            role: "user"
+          }
+        ],
+        modelId: "gpt-4o",
+        requestId: "req-chat-retry"
+      },
+      signal: new AbortController().signal,
+      token: "ghp_1234567890"
+    })) {
+      events.push({
+        type: event.type,
+        value:
+          event.type === "assistant_delta"
+            ? event.data
+            : event.type === "assistant_done"
+              ? `${event.usage.inputTokens}/${event.usage.outputTokens}`
+              : event.message
+      });
+    }
+
+    expect(events).toEqual([
+      {
+        type: "assistant_delta",
+        value: "The capital city of India is New Delhi."
+      },
+      {
+        type: "assistant_done",
+        value: "12/10"
+      }
+    ]);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "https://api.githubcopilot.test/chat/completions",
+      expect.objectContaining({
+        body: JSON.stringify({
+          messages: [
+            {
+              content: "indian capital city?",
+              role: "user"
+            }
+          ],
+          model: "gpt-4o",
+          stream: false
+        })
+      })
+    );
+  });
+
+  it("uses responses-only models without hitting chat completions and falls back to non-stream responses", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  family: "gpt-5.2-codex",
+                  type: "chat"
+                },
+                id: "gpt-5.2-codex",
+                model_picker_enabled: true,
+                name: "GPT-5.2-Codex",
+                supported_endpoints: ["/responses"]
+              }
+            ]
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "gpt-5.2-codex",
+            output: [
+              {
+                content: [
+                  {
+                    text: "New Delhi",
+                    type: "output_text"
+                  }
+                ],
+                type: "message"
+              }
+            ],
+            usage: {
+              input_tokens: 4,
+              output_tokens: 2
+            }
+          })
+        )
+      );
+
+    const client = new GitHubCopilotClient({
+      fetchFn: fetchMock,
+      copilotBaseUrl: "https://api.githubcopilot.test"
+    });
+
+    await client.listModels({
+      token: "ghp_1234567890"
+    });
+
+    const events: string[] = [];
+    for await (const event of client.streamChat({
+      request: {
+        messages: [
+          {
+            content: "indian capital city?",
+            id: "m1",
+            role: "user"
+          }
+        ],
+        modelId: "gpt-5.2-codex",
+        requestId: "req-responses-non-stream"
+      },
+      signal: new AbortController().signal,
+      token: "ghp_1234567890"
+    })) {
+      events.push(event.type === "assistant_delta" ? event.data : event.type);
+    }
+
+    expect(events).toEqual(["New Delhi", "assistant_done"]);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "https://api.githubcopilot.test/chat/completions",
+      expect.anything()
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://api.githubcopilot.test/responses",
+      expect.objectContaining({
+        body: JSON.stringify({
+          input: [
+            {
+              content: [
+                {
+                  text: "indian capital city?",
+                  type: "input_text"
+                }
+              ],
+              role: "user"
+            }
+          ],
+          model: "gpt-5.2-codex",
+          stream: true
+        })
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "https://api.githubcopilot.test/responses",
+      expect.objectContaining({
+        body: JSON.stringify({
+          input: [
+            {
+              content: [
+                {
+                  text: "indian capital city?",
+                  type: "input_text"
+                }
+              ],
+              role: "user"
+            }
+          ],
+          model: "gpt-5.2-codex",
+          stream: false
+        })
+      })
+    );
+  });
+
+  it("falls back to non-stream responses when a responses-only stream returns model_not_supported", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  family: "gpt-5.1-codex-mini",
+                  type: "chat"
+                },
+                id: "gpt-5.1-codex-mini",
+                model_picker_enabled: true,
+                name: "GPT-5.1-Codex-Mini",
+                supported_endpoints: ["/responses"]
+              }
+            ]
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "model_not_supported",
+              message: "The requested model is not supported."
+            }
+          }),
+          {
+            status: 400
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            output: [
+              {
+                content: [
+                  {
+                    text: "New Delhi",
+                    type: "output_text"
+                  }
+                ]
+              }
+            ],
+            usage: {
+              input_tokens: 4,
+              output_tokens: 2
+            }
+          })
+        )
+      );
+
+    const client = new GitHubCopilotClient({
+      fetchFn: fetchMock,
+      copilotBaseUrl: "https://api.githubcopilot.test"
+    });
+
+    await client.listModels({
+      token: "ghp_1234567890"
+    });
+
+    const events: string[] = [];
+    for await (const event of client.streamChat({
+      request: {
+        messages: [
+          {
+            content: "indian capital city?",
+            id: "m1",
+            role: "user"
+          }
+        ],
+        modelId: "gpt-5.1-codex-mini",
+        requestId: "req-responses-model-not-supported"
+      },
+      signal: new AbortController().signal,
+      token: "ghp_1234567890"
+    })) {
+      events.push(event.type === "assistant_delta" ? event.data : event.type);
+    }
+
+    expect(events).toEqual(["New Delhi", "assistant_done"]);
+  });
+
+  it("stops on responses endpoint unsupported_api errors", async () => {
+    const client = new GitHubCopilotClient({
+      fetchFn: vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  capabilities: {
+                    family: "gpt-5.2-codex",
+                    type: "chat"
+                  },
+                  id: "gpt-5.2-codex",
+                  model_picker_enabled: true,
+                  name: "GPT-5.2-Codex",
+                  supported_endpoints: ["/responses"]
+                }
+              ]
+            })
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "unsupported_api_for_model",
+                message: "model gpt-5.2-codex does not support Responses API."
+              }
+            }),
+            {
+              status: 400
+            }
+          )
+        )
+    });
+
+    await client.listModels({
+      token: "ghp_1234567890"
+    });
+
+    await expect(
+      client.streamChat({
+        request: {
+          messages: [],
+          modelId: "gpt-5.2-codex",
+          requestId: "req-responses-unsupported"
+        },
+        signal: new AbortController().signal,
+        token: "ghp_1234567890"
+      }).next()
+    ).rejects.toThrow("model gpt-5.2-codex does not support Responses API.");
+  });
+
+  it("does not retry non-stream responses model_not_supported failures", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  family: "gpt-5.1-codex-mini",
+                  type: "chat"
+                },
+                id: "gpt-5.1-codex-mini",
+                model_picker_enabled: true,
+                name: "GPT-5.1-Codex-Mini",
+                supported_endpoints: ["/responses"]
+              }
+            ]
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "model_not_supported",
+              message: "The requested model is not supported."
+            }
+          }),
+          {
+            status: 400
+          }
+        )
+      );
+
+    const client = new GitHubCopilotClient({
+      fetchFn: fetchMock,
+      copilotBaseUrl: "https://api.githubcopilot.test"
+    });
+
+    await client.listModels({
+      token: "ghp_1234567890"
+    });
+
+    await expect(
+      client.streamChat({
+        request: {
+          messages: [],
+          modelId: "gpt-5.1-codex-mini",
+          requestId: "req-responses-no-retry"
+        },
+        signal: new AbortController().signal,
+        token: "ghp_1234567890"
+      }).next()
+    ).rejects.toThrow("The requested model is not supported.");
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("parses array chat content in non-stream fallback", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  family: "gpt-4o",
+                  type: "chat"
+                },
+                id: "gpt-4o",
+                model_picker_enabled: true,
+                name: "GPT-4o"
+              }
+            ]
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: [
+                    {
+                      text: "New ",
+                      type: "text"
+                    },
+                    {
+                      text: "Delhi"
+                    },
+                    {
+                      text: "skip",
+                      type: "image"
+                    }
+                  ]
+                }
+              }
+            ],
+            usage: {
+              prompt_tokens: 4,
+              completion_tokens: 2
+            }
+          })
+        )
+      );
+
+    const client = new GitHubCopilotClient({
+      fetchFn: fetchMock,
+      copilotBaseUrl: "https://api.githubcopilot.test"
+    });
+
+    await client.listModels({
+      token: "ghp_1234567890"
+    });
+
+    const events: string[] = [];
+    for await (const event of client.streamChat({
+      request: {
+        messages: [
+          {
+            content: "indian capital city?",
+            id: "m1",
+            role: "user"
+          }
+        ],
+        modelId: "gpt-4o",
+        requestId: "req-chat-array-content"
+      },
+      signal: new AbortController().signal,
+      token: "ghp_1234567890"
+    })) {
+      events.push(event.type === "assistant_delta" ? event.data : event.type);
+    }
+
+    expect(events).toEqual(["New Delhi", "assistant_done"]);
+  });
+
+  it("returns only done when non-stream chat content is absent", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  family: "gpt-4o",
+                  type: "chat"
+                },
+                id: "gpt-4o",
+                model_picker_enabled: true,
+                name: "GPT-4o"
+              }
+            ]
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {}
+              }
+            ],
+            usage: {
+              prompt_tokens: 1,
+              completion_tokens: 0
+            }
+          })
+        )
+      );
+
+    const client = new GitHubCopilotClient({
+      fetchFn: fetchMock,
+      copilotBaseUrl: "https://api.githubcopilot.test"
+    });
+
+    await client.listModels({
+      token: "ghp_1234567890"
+    });
+
+    const events: string[] = [];
+    for await (const event of client.streamChat({
+      request: {
+        messages: [],
+        modelId: "gpt-4o",
+        requestId: "req-chat-empty-content"
+      },
+      signal: new AbortController().signal,
+      token: "ghp_1234567890"
+    })) {
+      events.push(event.type);
+    }
+
+    expect(events).toEqual(["assistant_done"]);
+  });
+
+  it("uses chat-only endpoint metadata without falling back to responses", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  family: "gpt-4o",
+                  type: "chat"
+                },
+                id: "gpt-4o",
+                model_picker_enabled: true,
+                name: "GPT-4o",
+                supported_endpoints: ["/chat/completions"]
+              }
+            ]
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'data: {"choices":[{"delta":{"content":"New Delhi"}}],"usage":{"prompt_tokens":1,"completion_tokens":2}}\n\n'
+                )
+              );
+              controller.close();
+            }
+          })
+        )
+      );
+
+    const client = new GitHubCopilotClient({
+      fetchFn: fetchMock,
+      copilotBaseUrl: "https://api.githubcopilot.test"
+    });
+
+    await client.listModels({
+      token: "ghp_1234567890"
+    });
+
+    const events: string[] = [];
+    for await (const event of client.streamChat({
+      request: {
+        messages: [],
+        modelId: "gpt-4o",
+        requestId: "req-chat-only"
+      },
+      signal: new AbortController().signal,
+      token: "ghp_1234567890"
+    })) {
+      events.push(event.type === "assistant_delta" ? event.data : event.type);
+    }
+
+    expect(events).toEqual(["New Delhi", "assistant_done"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses cached dual-endpoint metadata to switch from chat to responses", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                capabilities: {
+                  family: "gpt-5.4",
+                  type: "chat"
+                },
+                id: "gpt-5.4",
+                model_picker_enabled: true,
+                name: "GPT-5.4",
+                supported_endpoints: ["/chat/completions", "/responses"]
+              }
+            ]
+          })
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "unsupported_api_for_model",
+              message: "model \\\"gpt-5.4\\\" is not accessible via the /chat/completions endpoint"
+            }
+          }),
+          {
+            status: 400
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'data: {"type":"response.output_text.delta","delta":"New Delhi"}\n\n' +
+                    'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":2}}}\n\n'
+                )
+              );
+              controller.close();
+            }
+          })
+        )
+      );
+
+    const client = new GitHubCopilotClient({
+      fetchFn: fetchMock,
+      copilotBaseUrl: "https://api.githubcopilot.test"
+    });
+
+    await client.listModels({
+      token: "ghp_1234567890"
+    });
+
+    const events: string[] = [];
+    for await (const event of client.streamChat({
+      request: {
+        messages: [],
+        modelId: "gpt-5.4",
+        requestId: "req-dual-endpoint"
+      },
+      signal: new AbortController().signal,
+      token: "ghp_1234567890"
+    })) {
+      events.push(event.type === "assistant_delta" ? event.data : event.type);
+    }
+
+    expect(events).toEqual(["New Delhi", "assistant_done"]);
+  });
+
+  it("maps non-error fetch failures into a generic upstream error", async () => {
+    const client = new GitHubCopilotClient({
+      fetchFn: vi.fn().mockRejectedValue("boom")
+    });
+
+    await expect(
+      client.streamChat({
+        request: {
+          messages: [],
+          modelId: "gpt-4o",
+          requestId: "req-non-error"
+        },
+        signal: new AbortController().signal,
+        token: "ghp_1234567890"
+      }).next()
+    ).rejects.toThrow("github_copilot_request_failed");
   });
 
   it("uses global fetch when no fetch override is passed", async () => {
