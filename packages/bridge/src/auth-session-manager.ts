@@ -6,7 +6,7 @@ import type {
 } from "@copilotchat/shared";
 
 const SESSION_KEY = "copilot_session";
-const PROVIDER = "github-models";
+const PROVIDER = "github-copilot";
 const REFRESH_SKEW_MS = 60_000;
 
 export interface SecureStore {

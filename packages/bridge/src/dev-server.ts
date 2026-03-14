@@ -142,7 +142,7 @@ Bun.serve({
 
 console.log(`bridge listening on http://127.0.0.1:${port}`);
 console.log(`allowed origin: ${allowedOrigin}`);
-console.log(fakeMode ? "bridge mode: fake" : "bridge mode: live github-models");
+console.log(fakeMode ? "bridge mode: fake" : "bridge mode: live github-copilot");
 
 function createAuthProvider(): AuthProvider {
   if (fakeMode) {

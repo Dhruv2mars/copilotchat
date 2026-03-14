@@ -48,7 +48,7 @@ describe("AuthSessionManager", () => {
     await expect(manager.getSession()).resolves.toEqual({
       accountLabel: null,
       authenticated: false,
-      provider: "github-models"
+      provider: "github-copilot"
     });
   });
 
@@ -114,7 +114,7 @@ describe("AuthSessionManager", () => {
       authenticated: false,
       organization: "acme",
       pollAfterSeconds: 5,
-      provider: "github-models",
+      provider: "github-copilot",
       status: "pending"
     });
 
@@ -127,7 +127,7 @@ describe("AuthSessionManager", () => {
       authenticated: true,
       expiresAt: "2026-03-13T10:01:00.000Z",
       organization: "acme",
-      provider: "github-models",
+      provider: "github-copilot",
       status: "complete",
       tokenHint: "ghu_...cess"
     });
@@ -147,7 +147,7 @@ describe("AuthSessionManager", () => {
     await expect(manager.getSession()).resolves.toEqual({
       accountLabel: null,
       authenticated: false,
-      provider: "github-models"
+      provider: "github-copilot"
     });
     await expect(store.get("copilot_session")).resolves.toBeNull();
   });

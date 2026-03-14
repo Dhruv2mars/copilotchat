@@ -211,7 +211,7 @@ describe("createBridgeServer", () => {
       authenticated: false,
       organization: "acme",
       pollAfterSeconds: 5,
-      provider: "github-models",
+      provider: "github-copilot",
       status: "pending"
     });
 
@@ -233,7 +233,7 @@ describe("createBridgeServer", () => {
       accountLabel: "dhruv2mars",
       authenticated: true,
       organization: "acme",
-      provider: "github-models",
+      provider: "github-copilot",
       status: "complete",
       tokenHint: "ghu_...7890"
     });
@@ -244,7 +244,7 @@ describe("createBridgeServer", () => {
       accountLabel: "dhruv2mars",
       authenticated: true,
       organization: "acme",
-      provider: "github-models",
+      provider: "github-copilot",
       tokenHint: "ghu_...7890"
     });
     expect(provider.startDeviceAuthorization).toHaveBeenCalledWith({

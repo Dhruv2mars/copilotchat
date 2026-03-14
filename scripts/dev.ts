@@ -1,28 +1,34 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 
 const bunCmd = process.platform === "win32" ? "bun.cmd" : "bun";
-const port = process.env.PORT?.trim() || "4173";
-
-const child = spawn(bunCmd, ["x", "vercel", "dev", "--listen", port], {
-  cwd: process.cwd(),
-  env: process.env,
-  stdio: "inherit"
-});
+const children = [
+  startProcess(["run", "dev:bridge"]),
+  startProcess(["run", "dev:web"])
+];
 
 let shuttingDown = false;
 
-child.on("exit", (code, signal) => {
-  if (shuttingDown) {
-    process.exit(code ?? 0);
-  }
+for (const child of children) {
+  child.on("exit", (code, signal) => {
+    if (shuttingDown) {
+      return;
+    }
 
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
-  }
+    shuttingDown = true;
+    for (const otherChild of children) {
+      if (otherChild.pid !== child.pid) {
+        otherChild.kill("SIGTERM");
+      }
+    }
 
-  process.exit(code ?? 1);
-});
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+
+    process.exit(code ?? 1);
+  });
+}
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
@@ -33,9 +39,21 @@ function shutdown(signal: NodeJS.Signals) {
   }
 
   shuttingDown = true;
-  child.kill(signal);
+  for (const child of children) {
+    child.kill(signal);
+  }
 
   setTimeout(() => {
-    child.kill("SIGKILL");
+    for (const child of children) {
+      child.kill("SIGKILL");
+    }
   }, 1_000).unref();
+}
+
+function startProcess(args: string[]) {
+  return spawn(bunCmd, args, {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: "inherit"
+  });
 }

@@ -7,6 +7,19 @@ export interface BridgeHealth {
   status: "ok";
 }
 
+export interface BridgeState {
+  bridgeVersion?: string;
+  paired: boolean;
+  protocolVersion?: string;
+  reachable: boolean;
+}
+
+export interface BridgeBootstrapResponse {
+  auth: AuthSessionResponse;
+  bridge: BridgeState;
+  models: ListedModel[];
+}
+
 export interface PairStartRequest {
   origin: string;
 }
@@ -52,7 +65,7 @@ export interface AuthSessionResponse {
   authenticated: boolean;
   expiresAt?: string;
   organization?: string;
-  provider: "github-models";
+  provider: "github-copilot";
   tokenHint?: string;
 }
 
@@ -61,33 +74,23 @@ export interface AuthDevicePollResponse extends AuthSessionResponse {
   status: "complete" | "pending";
 }
 
-export interface AppBootstrapResponse {
-  auth: AuthSessionResponse;
-  devCliAvailable: boolean;
-  models: ListedModel[];
-}
-
-export interface PatAuthRequest {
-  token: string;
-}
-
-export interface AppDeviceAuthPollPendingResponse {
+export interface BridgeAuthPollPendingResponse {
   pollAfterSeconds?: number;
   status: "pending";
 }
-
-export interface AppDeviceAuthPollCompleteResponse extends AppBootstrapResponse {
-  status: "complete";
-}
-
-export type AppDeviceAuthPollResponse =
-  | AppDeviceAuthPollPendingResponse
-  | AppDeviceAuthPollCompleteResponse;
 
 export interface ListedModel {
   id: string;
   label: string;
 }
+
+export interface BridgeAuthPollCompleteResponse extends BridgeBootstrapResponse {
+  status: "complete";
+}
+
+export type BridgeAuthPollResult =
+  | BridgeAuthPollPendingResponse
+  | BridgeAuthPollCompleteResponse;
 
 export interface ChatMessage {
   content: string;
@@ -123,12 +126,3 @@ export type BridgeStreamEvent =
   | AssistantDeltaEvent
   | AssistantDoneEvent
   | AssistantErrorEvent;
-
-export interface ChatCompletionResponse {
-  message: ChatMessage;
-  usedModel?: ListedModel;
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-  };
-}
