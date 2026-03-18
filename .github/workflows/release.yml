@@ -8,6 +8,8 @@ on:
 env:
   RELEASE_TAG: ${{ github.ref_name }}
 
+concurrency: ${{ github.workflow }}-${{ github.ref_name }}
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -17,6 +19,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - id: meta
         run: |
           set -euo pipefail
@@ -33,6 +39,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release view "${RELEASE_TAG}" >/dev/null 2>&1 || gh release create "${RELEASE_TAG}" --title "${RELEASE_TAG}" --generate-notes
@@ -140,4 +149,8 @@ jobs:
             echo "skip: already on npm (${remote_v})"
             exit 0
           fi
+          rc="${RUNNER_TEMP:-/tmp}/npmrc"
+          echo "registry=https://registry.npmjs.org/" > "$rc"
+          export NPM_CONFIG_USERCONFIG="$rc"
+          unset NODE_AUTH_TOKEN || true
           cd packages/cli && npm publish --provenance --access public

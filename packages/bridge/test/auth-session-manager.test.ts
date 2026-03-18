@@ -247,4 +247,103 @@ describe("AuthSessionManager", () => {
       token: "access-1"
     });
   });
+
+  it("preserves non-expiring sessions and trims blank orgs from auth start", async () => {
+    const store = new MemoryStore();
+    await store.set(
+      SESSION_KEY,
+      JSON.stringify({
+        accountLabel: "dhruv2mars",
+        token: "access-1",
+        tokenHint: "ghu_...cess"
+      })
+    );
+
+    const provider: AuthProvider = {
+      async pollDeviceAuthorization() {
+        return {
+          intervalSeconds: 5,
+          status: "pending"
+        };
+      },
+      async startDeviceAuthorization() {
+        return {
+          deviceCode: "device-3",
+          expiresAt: "2026-03-13T10:10:00.000Z",
+          intervalSeconds: 5,
+          userCode: "ABCD-EFGH",
+          verificationUri: "https://github.com/login/device"
+        };
+      }
+    };
+
+    const manager = new AuthSessionManager({
+      now: () => Date.parse("2026-03-13T10:00:00.000Z"),
+      provider,
+      store
+    });
+
+    await expect(manager.getStoredSession()).resolves.toMatchObject({
+      token: "access-1"
+    });
+
+    await expect(
+      manager.startDeviceAuthorization({
+        organization: "   "
+      })
+    ).resolves.toMatchObject({
+      deviceCode: "device-3"
+    });
+
+    await expect(
+      manager.pollDeviceAuthorization({
+        deviceCode: "device-3"
+      })
+    ).resolves.toEqual({
+      accountLabel: null,
+      authenticated: false,
+      organization: undefined,
+      pollAfterSeconds: 5,
+      provider: "github-copilot",
+      status: "pending"
+    });
+  });
+
+  it("uses the default clock when no custom time source is provided", async () => {
+    const store = new MemoryStore();
+    await store.set(
+      SESSION_KEY,
+      JSON.stringify({
+        accountLabel: "dhruv2mars",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        token: "access-1",
+        tokenHint: "ghu_...cess"
+      })
+    );
+
+    const manager = new AuthSessionManager({
+      provider: {
+        async pollDeviceAuthorization() {
+          return {
+            intervalSeconds: 5,
+            status: "pending"
+          };
+        },
+        async startDeviceAuthorization() {
+          return {
+            deviceCode: "device-4",
+            expiresAt: "2026-03-13T10:10:00.000Z",
+            intervalSeconds: 5,
+            userCode: "ABCD-EFGH",
+            verificationUri: "https://github.com/login/device"
+          };
+        }
+      },
+      store
+    });
+
+    await expect(manager.getStoredSession()).resolves.toMatchObject({
+      token: "access-1"
+    });
+  });
 });
