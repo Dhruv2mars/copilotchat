@@ -59,3 +59,22 @@ Real manual flow:
 4. `cargo run -p copilotchat-cli -- chat "indian capital city?"`
 5. `cargo run -p copilotchat-cli`
 6. confirm thread history, model picker, streaming, logout/login
+
+## Release
+
+```bash
+bunx changeset
+bun run release:version
+```
+
+```bash
+TAG="v$(node -p \"require('./packages/cli/package.json').version\")"
+git tag "$TAG"
+git push origin "$TAG"
+```
+
+Install command:
+
+```bash
+npm i -g @dhruv2mars/copilotchat
+```
