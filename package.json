@@ -10,12 +10,16 @@
     "dev": "bun run scripts/dev.ts",
     "dev:web": "bun run --filter @copilotchat/web dev",
     "dev:bridge": "bun run --filter @copilotchat/bridge dev",
-    "test": "bun run test:coverage",
-    "test:coverage": "bun run --filter '*' test:coverage",
-    "build": "bun run --filter '*' build",
-    "check": "bun run --filter '*' check"
+    "test": "bun run test:js && bun run test:rust",
+    "test:js": "bun run --filter @copilotchat/shared test:coverage && bun run --filter @copilotchat/bridge test:coverage && bun run --filter @copilotchat/web test:coverage && bun run --filter @dhruv2mars/copilotchat test:coverage",
+    "test:rust": "cargo test --workspace",
+    "build": "bun run build:js && cargo build --workspace",
+    "build:js": "bun run --filter @copilotchat/shared build && bun run --filter @copilotchat/bridge build && bun run --filter @copilotchat/web build && bun run --filter @dhruv2mars/copilotchat build",
+    "check": "bun run check:js && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
+    "check:js": "bun run --filter @copilotchat/shared check && bun run --filter @copilotchat/bridge check && bun run --filter @copilotchat/web check && bun run --filter @dhruv2mars/copilotchat check"
   },
   "devDependencies": {
+    "c8": "^10.1.3",
     "@types/node": "24.5.2",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",

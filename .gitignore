@@ -11,3 +11,6 @@ playwright-report
 test-results
 *.log
 .vercel
+target
+Cargo.lock
+.copilotchat
