@@ -33,14 +33,18 @@ test("copilotchat lib resolves install paths and meta", () => {
 });
 
 test("copilotchat lib resolves update command and update arg detection", () => {
+  const isolatedEnv = {
+    COPILOTCHAT_INSTALL_ROOT: join(tmpdir(), "copilotchat-update-test-missing"),
+    npm_config_user_agent: ""
+  };
   assert.equal(shouldRunUpdateCommand(["update"]), true);
   assert.equal(shouldRunUpdateCommand(["chat"]), false);
 
-  const npmUpdate = resolveUpdateCommand({ npm_execpath: "/tmp/npm-cli.js" });
+  const npmUpdate = resolveUpdateCommand({ ...isolatedEnv, npm_execpath: "/tmp/npm-cli.js" });
   assert.equal(npmUpdate.command, process.execPath);
   assert.deepEqual(npmUpdate.args.slice(1), ["install", "-g", "@dhruv2mars/copilotchat@latest"]);
 
-  const bunUpdate = resolveUpdateCommand({ npm_execpath: "/tmp/bun" });
+  const bunUpdate = resolveUpdateCommand({ ...isolatedEnv, npm_execpath: "/tmp/bun" });
   assert.equal(bunUpdate.command, "bun");
   assert.deepEqual(bunUpdate.args, ["add", "-g", "@dhruv2mars/copilotchat@latest"]);
 });
