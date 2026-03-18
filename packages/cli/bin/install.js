@@ -23,6 +23,7 @@ import {
   parseChecksumForAsset,
   shouldInstallBinary
 } from "./install-lib.js";
+import { resolvePackageBinDir } from "./copilotchat-lib.js";
 
 const REPO = "Dhruv2mars/copilotchat";
 const installRoot = process.env.COPILOTCHAT_INSTALL_ROOT || join(homedir(), ".copilotchat");
@@ -32,7 +33,7 @@ const binName = process.platform === "win32" ? "copilotchat.exe" : "copilotchat"
 const destination = join(binDir, binName);
 const version = packageVersion();
 const installedVersion = readInstalledVersion(metaPath);
-const here = fileURLToPath(new URL(".", import.meta.url));
+const here = resolvePackageBinDir(import.meta.url);
 const repoRoot = join(here, "..", "..", "..");
 
 if (process.env.COPILOTCHAT_SKIP_DOWNLOAD === "1") process.exit(0);

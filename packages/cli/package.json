@@ -1,6 +1,6 @@
 {
   "name": "@dhruv2mars/copilotchat",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "GitHub Copilot chat app in your terminal",
   "type": "module",
   "bin": {
