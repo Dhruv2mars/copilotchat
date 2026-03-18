@@ -57,9 +57,11 @@ struct App {
     model_query: String,
     models: Vec<ListedModel>,
     session: Option<StoredSession>,
+    show_help: bool,
     status: String,
     stream_task: Option<JoinHandle<()>>,
     thread_cursor: usize,
+    thread_query: String,
     threads: Vec<ThreadSummary>,
 }
 
@@ -81,9 +83,11 @@ impl App {
             model_query: String::new(),
             models: Vec::new(),
             session: None,
+            show_help: false,
             status: "Ready".into(),
             stream_task: None,
             thread_cursor: 0,
+            thread_query: String::new(),
             threads,
         }
     }
@@ -109,6 +113,21 @@ impl App {
                 .then_with(|| left.label.cmp(&right.label))
         });
         models
+    }
+
+    fn filtered_threads(&self) -> Vec<&ThreadSummary> {
+        let query = self.thread_query.trim().to_lowercase();
+        let mut threads = self
+            .threads
+            .iter()
+            .filter(|thread| {
+                query.is_empty()
+                    || thread.title.to_lowercase().contains(&query)
+                    || thread.model_id.to_lowercase().contains(&query)
+            })
+            .collect::<Vec<_>>();
+        threads.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        threads
     }
 
     fn has_session(&self) -> bool {
@@ -165,6 +184,13 @@ impl App {
             Focus::Composer => "Composer",
             Focus::Models => "Models",
         }
+    }
+
+    fn account_label(&self) -> &str {
+        self.session
+            .as_ref()
+            .map(|session| session.account_label.as_str())
+            .unwrap_or("Signed out")
     }
 }
 
@@ -314,6 +340,19 @@ async fn handle_key_event(
     if key_event.modifiers.contains(KeyModifiers::CONTROL) && key_event.code == KeyCode::Char('c') {
         return Ok(true);
     }
+    if key_event.code == KeyCode::Char('?') {
+        app.show_help = !app.show_help;
+        return Ok(false);
+    }
+    if app.show_help {
+        if matches!(
+            key_event.code,
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?')
+        ) {
+            app.show_help = false;
+        }
+        return Ok(false);
+    }
     if key_event.code == KeyCode::Char('q') && !app.is_streaming() {
         return Ok(true);
     }
@@ -447,12 +486,23 @@ async fn handle_thread_key(key_event: KeyEvent, store: &ThreadStore, app: &mut A
         KeyCode::Char('n') => {
             create_new_thread(store, app).await?;
         }
-        KeyCode::Backspace | KeyCode::Delete | KeyCode::Char('d') => {
-            if let Some(thread) = app.threads.get(app.thread_cursor).cloned() {
+        KeyCode::Delete => {
+            let selected_thread = app
+                .filtered_threads()
+                .get(app.thread_cursor)
+                .cloned()
+                .cloned();
+            if let Some(thread) = selected_thread {
                 store.delete_thread(&thread.id).await?;
                 app.threads = store.list_threads().await?;
-                app.thread_cursor = app.thread_cursor.min(app.threads.len().saturating_sub(1));
-                if let Some(next_thread) = app.threads.get(app.thread_cursor).cloned() {
+                let (next_index, next_thread) = {
+                    let next_threads = app.filtered_threads();
+                    let next_index = app.thread_cursor.min(next_threads.len().saturating_sub(1));
+                    let next_thread = next_threads.get(next_index).cloned().cloned();
+                    (next_index, next_thread)
+                };
+                app.thread_cursor = next_index;
+                if let Some(next_thread) = next_thread {
                     app.set_current_thread(Some(&next_thread));
                     app.messages = store.thread(&next_thread.id).await?.messages;
                 } else {
@@ -463,21 +513,40 @@ async fn handle_thread_key(key_event: KeyEvent, store: &ThreadStore, app: &mut A
                 app.status = "Thread deleted".into();
             }
         }
+        KeyCode::Backspace => {
+            app.thread_query.pop();
+            app.thread_cursor = 0;
+        }
         KeyCode::Down => {
-            if !app.threads.is_empty() {
-                app.thread_cursor =
-                    (app.thread_cursor + 1).min(app.threads.len().saturating_sub(1));
+            let filtered_len = app.filtered_threads().len();
+            if filtered_len > 0 {
+                app.thread_cursor = (app.thread_cursor + 1).min(filtered_len.saturating_sub(1));
             }
         }
         KeyCode::Up => {
             app.thread_cursor = app.thread_cursor.saturating_sub(1);
         }
         KeyCode::Enter => {
-            if let Some(thread) = app.threads.get(app.thread_cursor).cloned() {
+            let selected_thread = app
+                .filtered_threads()
+                .get(app.thread_cursor)
+                .cloned()
+                .cloned();
+            if let Some(thread) = selected_thread {
                 app.set_current_thread(Some(&thread));
                 app.messages = store.thread(&thread.id).await?.messages;
                 store.save_config(&app.config).await?;
                 app.status = format!("Thread: {}", thread.title);
+            }
+        }
+        KeyCode::Esc => {
+            app.thread_query.clear();
+            app.thread_cursor = 0;
+        }
+        KeyCode::Char(value) => {
+            if key_event.modifiers.is_empty() || key_event.modifiers == KeyModifiers::SHIFT {
+                app.thread_query.push(value);
+                app.thread_cursor = 0;
             }
         }
         _ => {}
@@ -589,8 +658,14 @@ fn render(area: Rect, frame: &mut ratatui::Frame<'_>, app: &mut App) {
         let block = panel_block("Connect GitHub Copilot", true);
         let content = if let Some(auth_prompt) = &app.auth_prompt {
             vec![
-                Line::from("Approve GitHub Copilot in your browser."),
+                Line::from(Span::styled(
+                    "Connect GitHub Copilot",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
                 Line::from(""),
+                Line::from("Approve GitHub Copilot in your browser."),
                 Line::from(Span::raw(format!("URL  {0}", auth_prompt.verification_uri))),
                 Line::from(Span::styled(
                     format!("CODE {0}", auth_prompt.user_code),
@@ -604,10 +679,18 @@ fn render(area: Rect, frame: &mut ratatui::Frame<'_>, app: &mut App) {
             ]
         } else {
             vec![
+                Line::from(Span::styled(
+                    "Chat with your Copilot subscription",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
                 Line::from("Press Enter to connect GitHub Copilot."),
                 Line::from("Device auth opens in your browser."),
-                Line::from(""),
                 Line::from("Your Copilot token stays local."),
+                Line::from(""),
+                Line::from("After login, pick a model and start chatting."),
             ]
         };
         let paragraph = Paragraph::new(content)
@@ -621,7 +704,7 @@ fn render(area: Rect, frame: &mut ratatui::Frame<'_>, app: &mut App) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
+            Constraint::Length(2),
             Constraint::Min(12),
             Constraint::Length(2),
         ])
@@ -648,13 +731,26 @@ fn render(area: Rect, frame: &mut ratatui::Frame<'_>, app: &mut App) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(
-            "  {}  |  {}  |  focus {}",
+            "  {}  |  {}  |  {}  |  focus {}",
             app.current_model_label(),
             app.current_thread_title(),
+            app.account_label(),
             app.focus_label()
         )),
     ]);
-    frame.render_widget(Paragraph::new(header), outer[0]);
+    let header_lines = vec![
+        header,
+        Line::from(format!(
+            "Status: {}{}",
+            app.status,
+            if app.is_streaming() {
+                "  |  Esc stop"
+            } else {
+                ""
+            }
+        )),
+    ];
+    frame.render_widget(Paragraph::new(header_lines), outer[0]);
 
     let model_lines = model_panel_lines(app);
     frame.render_widget(
@@ -689,16 +785,12 @@ fn render(area: Rect, frame: &mut ratatui::Frame<'_>, app: &mut App) {
         .set_block(panel_block("Composer", app.focus == Focus::Composer));
     frame.render_widget(&app.composer, content[1]);
 
-    let footer = vec![
-        Line::from(Span::styled(
-            app.status.clone(),
-            Style::default().fg(Color::Gray),
-        )),
-        Line::from(
-            "Tab focus  Ctrl+N new  Ctrl+K models  Ctrl+J threads  Ctrl+M composer  Ctrl+L logout  Esc stop/clear",
-        ),
-    ];
+    let footer = vec![Line::from(shortcuts_line(app))];
     frame.render_widget(Paragraph::new(footer), outer[2]);
+
+    if app.show_help {
+        render_help_overlay(area, frame);
+    }
 }
 
 fn panel_block(title: &str, focused: bool) -> Block<'_> {
@@ -716,23 +808,29 @@ fn panel_block(title: &str, focused: bool) -> Block<'_> {
 
 fn model_panel_lines(app: &App) -> Vec<Line<'static>> {
     let query = if app.model_query.is_empty() {
-        "Search models...".to_string()
+        "Search: all models".to_string()
     } else {
-        app.model_query.clone()
+        format!("Search: {}", app.model_query)
     };
+    let filtered = app.filtered_models();
     let current = format!("Current: {}", app.current_model_label());
-    let mut lines = vec![Line::from(query), Line::from(current), Line::from("")];
-    for (index, model) in app.filtered_models().into_iter().take(6).enumerate() {
+    let mut lines = vec![
+        Line::from(query),
+        Line::from(format!("{} results", filtered.len())),
+        Line::from(current),
+        Line::from(""),
+    ];
+    for (index, model) in filtered.into_iter().take(6).enumerate() {
         let prefix = if index == app.model_cursor { ">" } else { " " };
         let state = if is_available_model(model) {
-            ""
+            "available"
         } else {
-            " [unavailable]"
+            "unavailable"
         };
-        lines.push(Line::from(format!("{prefix} {}{}", model.label, state)));
-        lines.push(Line::from(format!("  {}", model.id)));
+        lines.push(Line::from(format!("{prefix} {}", model.label)));
+        lines.push(Line::from(format!("  {}  ·  {}", model.id, state)));
     }
-    if lines.len() == 3 {
+    if lines.len() == 4 {
         lines.push(Line::from("No models match."));
     }
     lines
@@ -741,13 +839,26 @@ fn model_panel_lines(app: &App) -> Vec<Line<'static>> {
 fn thread_panel_lines(app: &App) -> Vec<Line<'static>> {
     if app.threads.is_empty() {
         return vec![
+            Line::from("Search: all chats"),
+            Line::from("0 results"),
+            Line::from(""),
             Line::from("No saved chats yet."),
             Line::from("Ctrl+N starts a new one."),
         ];
     }
 
-    let mut lines = Vec::new();
-    for (index, thread) in app.threads.iter().enumerate().take(10) {
+    let filtered = app.filtered_threads();
+    let query = if app.thread_query.is_empty() {
+        "Search: all chats".to_string()
+    } else {
+        format!("Search: {}", app.thread_query)
+    };
+    let mut lines = vec![
+        Line::from(query),
+        Line::from(format!("{} results", filtered.len())),
+        Line::from(""),
+    ];
+    for (index, thread) in filtered.iter().enumerate().take(10) {
         let prefix = if index == app.thread_cursor { ">" } else { " " };
         let current = if app.current_thread_id.as_deref() == Some(thread.id.as_str()) {
             " [open]"
@@ -756,6 +867,10 @@ fn thread_panel_lines(app: &App) -> Vec<Line<'static>> {
         };
         lines.push(Line::from(format!("{prefix} {}{}", thread.title, current)));
         lines.push(Line::from(format!("  {}", thread.model_id)));
+    }
+    if filtered.is_empty() {
+        lines.push(Line::from("No chats match."));
+        lines.push(Line::from("Esc clears search."));
     }
     lines
 }
@@ -770,9 +885,10 @@ fn message_panel_lines(app: &App) -> Vec<Line<'static>> {
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
-            Line::from("Write a prompt in the composer below."),
-            Line::from("Search models at left."),
-            Line::from("Use Ctrl+N for a fresh chat."),
+            Line::from("Pick a model, then write a prompt below."),
+            Line::from("Left rail: search chats and switch threads."),
+            Line::from("Top-left: search models without leaving chat."),
+            Line::from("Ctrl+N starts a fresh chat."),
         ];
     }
 
@@ -796,7 +912,10 @@ fn message_panel_lines(app: &App) -> Vec<Line<'static>> {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             };
-            let mut lines = vec![Line::from(Span::styled(role.to_string(), role_style))];
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(role.to_string(), role_style)),
+            ];
             if message.content.trim().is_empty() {
                 lines.push(Line::from("..."));
             } else {
@@ -804,13 +923,67 @@ fn message_panel_lines(app: &App) -> Vec<Line<'static>> {
                     message
                         .content
                         .lines()
-                        .map(|line| Line::from(line.to_string())),
+                        .map(|line| Line::from(format!("  {}", line))),
                 );
             }
-            lines.push(Line::from(""));
             lines
         })
         .collect()
+}
+
+fn shortcuts_line(app: &App) -> String {
+    if app.show_help {
+        return "? close help".into();
+    }
+    shortcuts_line_for_focus(app.focus, app.is_streaming())
+}
+
+fn shortcuts_line_for_focus(focus: Focus, is_streaming: bool) -> String {
+    match focus {
+        Focus::Threads => {
+            "Threads: type search  ↑↓ move  Enter open  Delete remove  Esc clear  Tab next  ? help"
+                .into()
+        }
+        Focus::Chat => "Chat: ↑↓ scroll  PgUp/PgDn move  End follow  Tab next  ? help".into(),
+        Focus::Composer => {
+            if is_streaming {
+                "Composer: Esc stop  Shift+Enter newline  Tab next  Ctrl+N new  ? help".into()
+            } else {
+                "Composer: Enter send  Shift+Enter newline  Tab next  Ctrl+N new  ? help".into()
+            }
+        }
+        Focus::Models => {
+            "Models: type search  ↑↓ move  Enter pick  Esc clear  Tab next  ? help".into()
+        }
+    }
+}
+
+fn render_help_overlay(area: Rect, frame: &mut ratatui::Frame<'_>) {
+    let lines = vec![
+        Line::from(Span::styled(
+            "Keyboard shortcuts",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Tab / Shift+Tab  move focus"),
+        Line::from("Ctrl+N  new chat"),
+        Line::from("Ctrl+J  jump threads"),
+        Line::from("Ctrl+K  jump models"),
+        Line::from("Ctrl+M  jump composer"),
+        Line::from("Ctrl+G  jump chat"),
+        Line::from("Ctrl+L  logout"),
+        Line::from("Delete  remove selected chat"),
+        Line::from("Esc  clear search or stop stream"),
+        Line::from("?  toggle help"),
+        Line::from("q  quit when idle"),
+    ];
+    let modal = Paragraph::new(lines)
+        .block(panel_block("Help", true))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(Clear, centered_rect(area, 52, 52));
+    frame.render_widget(modal, centered_rect(area, 52, 52));
 }
 
 fn max_chat_scroll(lines: &[Line<'_>], area: Rect) -> u16 {
@@ -1034,6 +1207,63 @@ mod tests {
             .map(|model| model.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(result, vec!["gpt-5.2", "gpt-5.4"]);
+    }
+
+    #[test]
+    fn filtered_threads_match_query_across_title_and_model() {
+        let mut app = App::new(
+            AppConfig::default(),
+            vec![
+                ThreadSummary {
+                    id: "thread-1".into(),
+                    title: "India capitals".into(),
+                    model_id: "gpt-5.2".into(),
+                    updated_at: "2".into(),
+                },
+                ThreadSummary {
+                    id: "thread-2".into(),
+                    title: "Release notes".into(),
+                    model_id: "claude-sonnet-4.5".into(),
+                    updated_at: "3".into(),
+                },
+            ],
+        );
+        app.thread_query = "claude".into();
+
+        let filtered = app.filtered_threads();
+        let result = filtered
+            .iter()
+            .map(|thread| thread.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(result, vec!["thread-2"]);
+    }
+
+    #[test]
+    fn thread_panel_lines_show_search_state_and_empty_match_message() {
+        let mut app = App::new(
+            AppConfig::default(),
+            vec![ThreadSummary {
+                id: "thread-1".into(),
+                title: "India capitals".into(),
+                model_id: "gpt-5.2".into(),
+                updated_at: "2".into(),
+            }],
+        );
+        app.thread_query = "claude".into();
+
+        let text = thread_panel_lines(&app)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(text[0], "Search: claude");
+        assert!(text.iter().any(|line| line == "0 results"));
+        assert!(text.iter().any(|line| line == "No chats match."));
+    }
+
+    #[test]
+    fn shortcuts_line_changes_with_focus_and_streaming_state() {
+        assert!(shortcuts_line_for_focus(Focus::Composer, false).contains("Enter send"));
+        assert!(shortcuts_line_for_focus(Focus::Composer, true).contains("Esc stop"));
     }
 
     #[test]
