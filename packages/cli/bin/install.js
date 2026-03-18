@@ -21,6 +21,7 @@ import {
   checksumsAssetNameFor,
   packageManagerHintFromEnv,
   parseChecksumForAsset,
+  resolvePackageVersion,
   shouldInstallBinary
 } from "./install-lib.js";
 import { resolvePackageBinDir } from "./copilotchat-lib.js";
@@ -31,9 +32,9 @@ const binDir = join(installRoot, "bin");
 const metaPath = join(installRoot, "install-meta.json");
 const binName = process.platform === "win32" ? "copilotchat.exe" : "copilotchat";
 const destination = join(binDir, binName);
-const version = packageVersion();
-const installedVersion = readInstalledVersion(metaPath);
 const here = resolvePackageBinDir(import.meta.url);
+const version = resolvePackageVersion(join(here, "..", "package.json"), process.env);
+const installedVersion = readInstalledVersion(metaPath);
 const repoRoot = join(here, "..", "..", "..");
 
 if (process.env.COPILOTCHAT_SKIP_DOWNLOAD === "1") process.exit(0);
@@ -76,15 +77,6 @@ try {
   } catch {}
   console.error(`copilotchat: install failed (${String(errorValue)})`);
   process.exit(1);
-}
-
-function packageVersion() {
-  try {
-    const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
-    return pkg.version;
-  } catch {
-    return process.env.npm_package_version || "0.0.0";
-  }
 }
 
 function readInstalledVersion(path) {

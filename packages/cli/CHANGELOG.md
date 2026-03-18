@@ -1,5 +1,12 @@
 # @dhruv2mars/copilotchat
 
+## 0.1.6
+
+### Patch Changes
+
+- Fix installer package-version lookup so first-run native binary download uses the real published version instead of falling back to `v0.0.0`.
+- Restore Bun global install download flow end to end.
+
 ## 0.1.5
 
 ### Patch Changes
