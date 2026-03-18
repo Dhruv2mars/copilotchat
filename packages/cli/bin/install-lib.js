@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export function assetNameFor(platform = process.platform, arch = process.arch) {
@@ -49,4 +50,15 @@ export function shouldInstallBinary({ binExists, installedVersion, packageVersio
   if (!binExists) return true;
   if (!packageVersion) return false;
   return installedVersion !== packageVersion;
+}
+
+export function resolvePackageVersion(packageJsonPath, env = process.env) {
+  try {
+    const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+    return typeof pkg.version === "string" && pkg.version.length > 0
+      ? pkg.version
+      : (env.npm_package_version || "0.0.0");
+  } catch {
+    return env.npm_package_version || "0.0.0";
+  }
 }
