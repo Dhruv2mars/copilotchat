@@ -8,7 +8,7 @@ Primary user flow:
 - install `copilotchat`
 - open terminal app
 - connect GitHub Copilot via device flow
-- store auth in OS secure storage
+- store auth only in local app files under `~/.copilotchat/`
 - fetch available Copilot chat models
 - search/select model
 - chat with streaming responses
@@ -42,10 +42,10 @@ Monorepo with Bun workspaces + Rust workspace.
 ### Desired Runtime Flow
 
 1. User runs `copilotchat`.
-2. CLI checks secure local session.
+2. CLI checks local session file.
 3. If signed out, CLI starts GitHub device auth.
 4. User approves device code in browser.
-5. CLI stores session in OS secure storage.
+5. CLI stores session in local app files only.
 6. CLI loads Copilot models.
 7. User searches/selects model in TUI.
 8. User chats and receives streaming output.
@@ -91,7 +91,7 @@ bun run build
 
 - Use clear machine-readable errors where practical.
 - Do not swallow provider/auth failures.
-- Secure storage failure must fail clearly, not downgrade silently.
+- Local session storage failure must fail clearly.
 
 ## CLI Contract
 
@@ -123,6 +123,7 @@ Stored under:
 Expected files/dirs:
 - `install-meta.json`
 - `config.json`
+- `session.json`
 - `threads/`
 - `logs/`
 - `bin/`

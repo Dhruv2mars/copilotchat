@@ -19,7 +19,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 use tui_textarea::{Input, Key, TextArea};
@@ -37,13 +37,17 @@ enum AppEvent {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Focus {
+    Threads,
+    Chat,
     Composer,
     Models,
-    Threads,
 }
 
 struct App {
     auth_prompt: Option<DeviceAuthorization>,
+    chat_follow: bool,
+    chat_max_scroll: u16,
+    chat_scroll: u16,
     composer: TextArea<'static>,
     config: AppConfig,
     current_thread_id: Option<String>,
@@ -62,9 +66,12 @@ struct App {
 impl App {
     fn new(config: AppConfig, threads: Vec<ThreadSummary>) -> Self {
         let mut composer = TextArea::default();
-        composer.set_block(Block::default().title("Composer").borders(Borders::ALL));
+        composer.set_block(panel_block("Composer", true));
         Self {
             auth_prompt: None,
+            chat_follow: true,
+            chat_max_scroll: 0,
+            chat_scroll: 0,
             composer,
             config,
             current_thread_id: None,
@@ -87,14 +94,21 @@ impl App {
 
     fn filtered_models(&self) -> Vec<&ListedModel> {
         let query = self.model_query.to_lowercase();
-        self.models
+        let mut models = self
+            .models
             .iter()
             .filter(|model| {
                 query.is_empty()
                     || model.id.to_lowercase().contains(&query)
                     || model.label.to_lowercase().contains(&query)
             })
-            .collect()
+            .collect::<Vec<_>>();
+        models.sort_by(|left, right| {
+            availability_rank(left)
+                .cmp(&availability_rank(right))
+                .then_with(|| left.label.cmp(&right.label))
+        });
+        models
     }
 
     fn has_session(&self) -> bool {
@@ -107,15 +121,50 @@ impl App {
 
     fn next_focus(&mut self) {
         self.focus = match self.focus {
+            Focus::Threads => Focus::Chat,
+            Focus::Chat => Focus::Composer,
             Focus::Composer => Focus::Models,
             Focus::Models => Focus::Threads,
-            Focus::Threads => Focus::Composer,
+        };
+    }
+
+    fn previous_focus(&mut self) {
+        self.focus = match self.focus {
+            Focus::Threads => Focus::Models,
+            Focus::Chat => Focus::Threads,
+            Focus::Composer => Focus::Chat,
+            Focus::Models => Focus::Composer,
         };
     }
 
     fn set_current_thread(&mut self, thread: Option<&ThreadSummary>) {
         self.current_thread_id = thread.map(|value| value.id.clone());
         self.config.current_thread_id = self.current_thread_id.clone();
+    }
+
+    fn current_model_label(&self) -> String {
+        self.models
+            .iter()
+            .find(|model| self.current_model_id() == Some(model.id.as_str()))
+            .map(|model| model.label.clone())
+            .unwrap_or_else(|| "No model".into())
+    }
+
+    fn current_thread_title(&self) -> String {
+        self.threads
+            .iter()
+            .find(|thread| self.current_thread_id.as_deref() == Some(thread.id.as_str()))
+            .map(|thread| thread.title.clone())
+            .unwrap_or_else(|| "New chat".into())
+    }
+
+    fn focus_label(&self) -> &'static str {
+        match self.focus {
+            Focus::Threads => "Threads",
+            Focus::Chat => "Chat",
+            Focus::Composer => "Composer",
+            Focus::Models => "Models",
+        }
     }
 }
 
@@ -126,11 +175,19 @@ pub async fn run_tui(client: GitHubCopilotClient) -> Result<()> {
         app.session = Some(session.clone());
         app.models = client.list_models(&session.token).await?;
         app.config.current_model_id = Some(choose_model(&app.config, &app.models)?);
+        app.status = format!("Connected: {}", session.account_label);
     }
     if let Some(thread_id) = app.config.current_thread_id.clone() {
         if let Ok(thread) = store.thread(&thread_id).await {
             app.current_thread_id = Some(thread_id);
             app.messages = thread.messages;
+            if let Some(index) = app
+                .threads
+                .iter()
+                .position(|thread| app.current_thread_id.as_deref() == Some(thread.id.as_str()))
+            {
+                app.thread_cursor = index;
+            }
         }
     } else if let Some(first_thread) = app.threads.first().cloned() {
         app.set_current_thread(Some(&first_thread));
@@ -213,11 +270,13 @@ async fn handle_app_event(
         }
         AppEvent::ChatDone(message) => {
             app.stream_task = None;
+            app.chat_follow = true;
             app.status = message;
             persist_current_thread(store, app).await?;
         }
         AppEvent::ChatError(message) => {
             app.stream_task = None;
+            app.chat_follow = true;
             app.status = message;
             persist_current_thread(store, app).await?;
         }
@@ -226,10 +285,14 @@ async fn handle_app_event(
                 if let Some(last_message) = app.messages.last_mut() {
                     last_message.content.push_str(&delta);
                 }
+                if app.chat_follow {
+                    app.chat_scroll = app.chat_max_scroll;
+                }
                 persist_current_thread(store, app).await?;
             }
             StreamEvent::Done(usage) => {
                 app.stream_task = None;
+                app.chat_follow = true;
                 app.status = format!(
                     "Done: {} in / {} out",
                     usage.input_tokens, usage.output_tokens
@@ -262,6 +325,36 @@ async fn handle_key_event(
         return Ok(false);
     }
 
+    if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+        match key_event.code {
+            KeyCode::Char('n') => {
+                create_new_thread(store, app).await?;
+                return Ok(false);
+            }
+            KeyCode::Char('l') => {
+                logout(app).await?;
+                return Ok(false);
+            }
+            KeyCode::Char('j') => {
+                app.focus = Focus::Threads;
+                return Ok(false);
+            }
+            KeyCode::Char('k') => {
+                app.focus = Focus::Models;
+                return Ok(false);
+            }
+            KeyCode::Char('g') => {
+                app.focus = Focus::Chat;
+                return Ok(false);
+            }
+            KeyCode::Char('m') => {
+                app.focus = Focus::Composer;
+                return Ok(false);
+            }
+            _ => {}
+        }
+    }
+
     if !app.has_session() {
         if matches!(key_event.code, KeyCode::Enter | KeyCode::Char('l')) {
             start_login(client.clone(), app, event_tx.clone()).await?;
@@ -273,11 +366,16 @@ async fn handle_key_event(
         app.next_focus();
         return Ok(false);
     }
+    if key_event.code == KeyCode::BackTab {
+        app.previous_focus();
+        return Ok(false);
+    }
 
     match app.focus {
+        Focus::Threads => handle_thread_key(key_event, store, app).await?,
+        Focus::Chat => handle_chat_key(key_event, app),
         Focus::Composer => handle_composer_key(key_event, client, store, app, event_tx).await?,
         Focus::Models => handle_model_key(key_event, store, app).await?,
-        Focus::Threads => handle_thread_key(key_event, store, app).await?,
     }
     Ok(false)
 }
@@ -324,6 +422,10 @@ async fn handle_model_key(key_event: KeyEvent, store: &ThreadStore, app: &mut Ap
         }
         KeyCode::Enter => {
             if let Some(model) = filtered.get(app.model_cursor) {
+                if !is_available_model(model) {
+                    app.status = format!("Unavailable in Copilot: {}", model.label);
+                    return Ok(());
+                }
                 let model_id = model.id.clone();
                 let model_label = model.label.clone();
                 app.config.current_model_id = Some(model_id);
@@ -343,13 +445,9 @@ async fn handle_model_key(key_event: KeyEvent, store: &ThreadStore, app: &mut Ap
 async fn handle_thread_key(key_event: KeyEvent, store: &ThreadStore, app: &mut App) -> Result<()> {
     match key_event.code {
         KeyCode::Char('n') => {
-            app.current_thread_id = Some(format!("thread-{}", Uuid::new_v4()));
-            app.config.current_thread_id = app.current_thread_id.clone();
-            app.messages.clear();
-            store.save_config(&app.config).await?;
-            app.status = "New thread".into();
+            create_new_thread(store, app).await?;
         }
-        KeyCode::Char('d') => {
+        KeyCode::Backspace | KeyCode::Delete | KeyCode::Char('d') => {
             if let Some(thread) = app.threads.get(app.thread_cursor).cloned() {
                 store.delete_thread(&thread.id).await?;
                 app.threads = store.list_threads().await?;
@@ -387,6 +485,61 @@ async fn handle_thread_key(key_event: KeyEvent, store: &ThreadStore, app: &mut A
     Ok(())
 }
 
+fn handle_chat_key(key_event: KeyEvent, app: &mut App) {
+    match key_event.code {
+        KeyCode::Up => {
+            app.chat_follow = false;
+            app.chat_scroll = app.chat_scroll.saturating_sub(1);
+        }
+        KeyCode::Down => {
+            app.chat_follow = false;
+            app.chat_scroll = (app.chat_scroll + 1).min(app.chat_max_scroll);
+        }
+        KeyCode::PageUp => {
+            app.chat_follow = false;
+            app.chat_scroll = app.chat_scroll.saturating_sub(6);
+        }
+        KeyCode::PageDown => {
+            app.chat_follow = false;
+            app.chat_scroll = (app.chat_scroll + 6).min(app.chat_max_scroll);
+        }
+        KeyCode::Home => {
+            app.chat_follow = false;
+            app.chat_scroll = 0;
+        }
+        KeyCode::End | KeyCode::Esc => {
+            app.chat_follow = true;
+            app.chat_scroll = app.chat_max_scroll;
+        }
+        _ => {}
+    }
+}
+
+async fn create_new_thread(store: &ThreadStore, app: &mut App) -> Result<()> {
+    app.current_thread_id = Some(format!("thread-{}", Uuid::new_v4()));
+    app.config.current_thread_id = app.current_thread_id.clone();
+    app.messages.clear();
+    app.chat_follow = true;
+    app.chat_scroll = 0;
+    store.save_config(&app.config).await?;
+    app.status = "New chat".into();
+    Ok(())
+}
+
+async fn logout(app: &mut App) -> Result<()> {
+    session_store()?.clear()?;
+    if let Some(task) = app.stream_task.take() {
+        task.abort();
+    }
+    app.session = None;
+    app.auth_prompt = None;
+    app.models.clear();
+    app.model_query.clear();
+    app.model_cursor = 0;
+    app.status = "Logged out".into();
+    Ok(())
+}
+
 async fn persist_current_thread(store: &ThreadStore, app: &App) -> Result<()> {
     let Some(thread_id) = app.current_thread_id.clone() else {
         return Ok(());
@@ -398,13 +551,14 @@ async fn persist_current_thread(store: &ThreadStore, app: &App) -> Result<()> {
         return Ok(());
     }
 
+    let created_at = store
+        .thread(&thread_id)
+        .await
+        .map(|thread| thread.created_at)
+        .unwrap_or_else(|_| current_timestamp());
+
     let thread = copilotchat_core::types::ThreadRecord {
-        created_at: app
-            .threads
-            .iter()
-            .find(|thread| thread.id == thread_id)
-            .map(|thread| thread.updated_at.clone())
-            .unwrap_or_else(|| "0".into()),
+        created_at,
         id: thread_id,
         messages: app.messages.clone(),
         model_id,
@@ -430,25 +584,30 @@ fn current_timestamp() -> String {
         .to_string()
 }
 
-fn render(area: Rect, frame: &mut ratatui::Frame<'_>, app: &App) {
+fn render(area: Rect, frame: &mut ratatui::Frame<'_>, app: &mut App) {
     if !app.has_session() {
-        let block = Block::default()
-            .title("Connect GitHub Copilot")
-            .borders(Borders::ALL);
+        let block = panel_block("Connect GitHub Copilot", true);
         let content = if let Some(auth_prompt) = &app.auth_prompt {
             vec![
-                Line::from("Open GitHub device activation."),
-                Line::from(Span::raw(format!("URL: {}", auth_prompt.verification_uri))),
+                Line::from("Approve GitHub Copilot in your browser."),
+                Line::from(""),
+                Line::from(Span::raw(format!("URL  {0}", auth_prompt.verification_uri))),
                 Line::from(Span::styled(
-                    format!("Code: {}", auth_prompt.user_code),
-                    Style::default().add_modifier(Modifier::BOLD),
+                    format!("CODE {0}", auth_prompt.user_code),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )),
+                Line::from(""),
                 Line::from("Waiting for approval..."),
+                Line::from("Press q to quit."),
             ]
         } else {
             vec![
                 Line::from("Press Enter to connect GitHub Copilot."),
-                Line::from("Browser will open automatically."),
+                Line::from("Device auth opens in your browser."),
+                Line::from(""),
+                Line::from("Your Copilot token stays local."),
             ]
         };
         let paragraph = Paragraph::new(content)
@@ -459,104 +618,223 @@ fn render(area: Rect, frame: &mut ratatui::Frame<'_>, app: &App) {
         return;
     }
 
-    let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(28), Constraint::Min(50)])
-        .split(area);
-    let sidebar = layout[0];
-    let content = layout[1];
-    let right = Layout::default()
+    let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(10),
-            Constraint::Min(10),
-            Constraint::Length(5),
             Constraint::Length(1),
+            Constraint::Min(12),
+            Constraint::Length(2),
         ])
-        .split(content);
+        .split(area);
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(34), Constraint::Min(48)])
+        .split(outer[1]);
+    let sidebar = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(11), Constraint::Min(10)])
+        .split(body[0]);
+    let content = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(12), Constraint::Length(6)])
+        .split(body[1]);
 
-    let thread_items = app
-        .threads
-        .iter()
-        .enumerate()
-        .map(|(index, thread)| {
-            let style = if index == app.thread_cursor && app.focus == Focus::Threads {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else {
-                Style::default()
-            };
-            ListItem::new(Line::from(thread.title.clone())).style(style)
-        })
-        .collect::<Vec<_>>();
-    frame.render_widget(
-        List::new(thread_items).block(Block::default().title("Threads").borders(Borders::ALL)),
-        sidebar,
-    );
+    let header = Line::from(vec![
+        Span::styled(
+            " copilotchat ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(
+            "  {}  |  {}  |  focus {}",
+            app.current_model_label(),
+            app.current_thread_title(),
+            app.focus_label()
+        )),
+    ]);
+    frame.render_widget(Paragraph::new(header), outer[0]);
 
-    let models = app.filtered_models();
-    let mut model_lines = vec![Line::from(format!(
-        "Search: {}",
-        if app.model_query.is_empty() {
-            ""
-        } else {
-            &app.model_query
-        }
-    ))];
-    for (index, model) in models.into_iter().take(5).enumerate() {
-        let prefix = if index == app.model_cursor && app.focus == Focus::Models {
-            "> "
-        } else {
-            "  "
-        };
-        model_lines.push(Line::from(format!(
-            "{prefix}{} ({})",
-            model.label, model.id
-        )));
-    }
-    if let Some(model_id) = app.current_model_id() {
-        model_lines.push(Line::from(format!("Current: {model_id}")));
-    }
+    let model_lines = model_panel_lines(app);
     frame.render_widget(
         Paragraph::new(model_lines)
-            .block(Block::default().title("Models").borders(Borders::ALL))
-            .wrap(Wrap { trim: true }),
-        right[0],
-    );
-
-    let message_lines = if app.messages.is_empty() {
-        vec![Line::from("No messages yet.")]
-    } else {
-        app.messages
-            .iter()
-            .flat_map(|message| {
-                let role = match message.role {
-                    MessageRole::Assistant => "Assistant",
-                    MessageRole::System => "System",
-                    MessageRole::User => "You",
-                };
-                vec![
-                    Line::from(Span::styled(
-                        role,
-                        Style::default().add_modifier(Modifier::BOLD),
-                    )),
-                    Line::from(message.content.clone()),
-                    Line::from(""),
-                ]
-            })
-            .collect::<Vec<_>>()
-    };
-    frame.render_widget(
-        Paragraph::new(message_lines)
-            .block(Block::default().title("Chat").borders(Borders::ALL))
+            .block(panel_block("Models", app.focus == Focus::Models))
             .wrap(Wrap { trim: false }),
-        right[1],
+        sidebar[0],
     );
 
-    frame.render_widget(&app.composer, right[2]);
+    let thread_lines = thread_panel_lines(app);
     frame.render_widget(
-        Paragraph::new(app.status.clone()).style(Style::default().fg(Color::DarkGray)),
-        right[3],
+        Paragraph::new(thread_lines)
+            .block(panel_block("Threads", app.focus == Focus::Threads))
+            .wrap(Wrap { trim: false }),
+        sidebar[1],
     );
+
+    let message_lines = message_panel_lines(app);
+    let mut chat = Paragraph::new(message_lines.clone())
+        .block(panel_block("Chat", app.focus == Focus::Chat))
+        .wrap(Wrap { trim: false });
+    app.chat_max_scroll = max_chat_scroll(&message_lines, content[0]);
+    if app.chat_follow {
+        app.chat_scroll = app.chat_max_scroll;
+    } else {
+        app.chat_scroll = app.chat_scroll.min(app.chat_max_scroll);
+    }
+    chat = chat.scroll((app.chat_scroll, 0));
+    frame.render_widget(chat, content[0]);
+
+    app.composer
+        .set_block(panel_block("Composer", app.focus == Focus::Composer));
+    frame.render_widget(&app.composer, content[1]);
+
+    let footer = vec![
+        Line::from(Span::styled(
+            app.status.clone(),
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(
+            "Tab focus  Ctrl+N new  Ctrl+K models  Ctrl+J threads  Ctrl+M composer  Ctrl+L logout  Esc stop/clear",
+        ),
+    ];
+    frame.render_widget(Paragraph::new(footer), outer[2]);
+}
+
+fn panel_block(title: &str, focused: bool) -> Block<'_> {
+    let style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(style)
+}
+
+fn model_panel_lines(app: &App) -> Vec<Line<'static>> {
+    let query = if app.model_query.is_empty() {
+        "Search models...".to_string()
+    } else {
+        app.model_query.clone()
+    };
+    let current = format!("Current: {}", app.current_model_label());
+    let mut lines = vec![Line::from(query), Line::from(current), Line::from("")];
+    for (index, model) in app.filtered_models().into_iter().take(6).enumerate() {
+        let prefix = if index == app.model_cursor { ">" } else { " " };
+        let state = if is_available_model(model) {
+            ""
+        } else {
+            " [unavailable]"
+        };
+        lines.push(Line::from(format!("{prefix} {}{}", model.label, state)));
+        lines.push(Line::from(format!("  {}", model.id)));
+    }
+    if lines.len() == 3 {
+        lines.push(Line::from("No models match."));
+    }
+    lines
+}
+
+fn thread_panel_lines(app: &App) -> Vec<Line<'static>> {
+    if app.threads.is_empty() {
+        return vec![
+            Line::from("No saved chats yet."),
+            Line::from("Ctrl+N starts a new one."),
+        ];
+    }
+
+    let mut lines = Vec::new();
+    for (index, thread) in app.threads.iter().enumerate().take(10) {
+        let prefix = if index == app.thread_cursor { ">" } else { " " };
+        let current = if app.current_thread_id.as_deref() == Some(thread.id.as_str()) {
+            " [open]"
+        } else {
+            ""
+        };
+        lines.push(Line::from(format!("{prefix} {}{}", thread.title, current)));
+        lines.push(Line::from(format!("  {}", thread.model_id)));
+    }
+    lines
+}
+
+fn message_panel_lines(app: &App) -> Vec<Line<'static>> {
+    if app.messages.is_empty() {
+        return vec![
+            Line::from(Span::styled(
+                "Start chatting",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("Write a prompt in the composer below."),
+            Line::from("Search models at left."),
+            Line::from("Use Ctrl+N for a fresh chat."),
+        ];
+    }
+
+    let assistant_label = app.current_model_label();
+    app.messages
+        .iter()
+        .flat_map(|message| {
+            let role = match message.role {
+                MessageRole::Assistant => assistant_label.as_str(),
+                MessageRole::System => "System",
+                MessageRole::User => "You",
+            };
+            let role_style = match message.role {
+                MessageRole::Assistant => Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+                MessageRole::System => Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+                MessageRole::User => Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            };
+            let mut lines = vec![Line::from(Span::styled(role.to_string(), role_style))];
+            if message.content.trim().is_empty() {
+                lines.push(Line::from("..."));
+            } else {
+                lines.extend(
+                    message
+                        .content
+                        .lines()
+                        .map(|line| Line::from(line.to_string())),
+                );
+            }
+            lines.push(Line::from(""));
+            lines
+        })
+        .collect()
+}
+
+fn max_chat_scroll(lines: &[Line<'_>], area: Rect) -> u16 {
+    if area.width == 0 || area.height == 0 {
+        return 0;
+    }
+    let inner_width = area.width.saturating_sub(2).max(1) as usize;
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let rendered_lines = lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(inner_width))
+        .sum::<usize>();
+    rendered_lines.saturating_sub(inner_height) as u16
+}
+
+fn availability_rank(model: &ListedModel) -> u8 {
+    if is_available_model(model) { 0 } else { 1 }
+}
+
+fn is_available_model(model: &ListedModel) -> bool {
+    matches!(
+        model.availability,
+        copilotchat_core::types::ModelAvailability::Available
+    )
 }
 
 async fn send_message(
@@ -579,14 +857,14 @@ async fn send_message(
         return Ok(());
     }
     app.composer = TextArea::default();
-    app.composer
-        .set_block(Block::default().title("Composer").borders(Borders::ALL));
+    app.composer.set_block(panel_block("Composer", true));
     let thread_id = app
         .current_thread_id
         .clone()
         .unwrap_or_else(|| format!("thread-{}", Uuid::new_v4()));
     app.current_thread_id = Some(thread_id.clone());
     app.config.current_thread_id = Some(thread_id.clone());
+    app.chat_follow = true;
 
     let user_message = ChatMessage {
         content: prompt,
@@ -605,6 +883,7 @@ async fn send_message(
     thread.messages.push(assistant_message.clone());
     store.save_thread(&thread).await?;
     app.messages = thread.messages.clone();
+    app.chat_scroll = app.chat_max_scroll;
     app.config.current_model_id = Some(model_id.clone());
     store.save_config(&app.config).await?;
     app.status = "Streaming...".into();
@@ -718,5 +997,56 @@ fn key_event_to_input(value: KeyEvent) -> Input {
         ctrl: value.modifiers.contains(KeyModifiers::CONTROL),
         key,
         shift: value.modifiers.contains(KeyModifiers::SHIFT),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use copilotchat_core::types::ModelAvailability;
+
+    use super::*;
+
+    #[test]
+    fn filtered_models_prioritize_available_results() {
+        let mut app = App::new(AppConfig::default(), Vec::new());
+        app.models = vec![
+            ListedModel {
+                availability: ModelAvailability::Unsupported,
+                id: "gpt-5.4".into(),
+                label: "GPT-5.4".into(),
+            },
+            ListedModel {
+                availability: ModelAvailability::Available,
+                id: "claude-sonnet-4.5".into(),
+                label: "Claude Sonnet 4.5".into(),
+            },
+            ListedModel {
+                availability: ModelAvailability::Available,
+                id: "gpt-5.2".into(),
+                label: "GPT-5.2".into(),
+            },
+        ];
+        app.model_query = "gpt".into();
+
+        let filtered = app.filtered_models();
+        let result = filtered
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(result, vec!["gpt-5.2", "gpt-5.4"]);
+    }
+
+    #[test]
+    fn max_chat_scroll_keeps_latest_lines_visible() {
+        let lines = vec![
+            Line::from("one"),
+            Line::from("two"),
+            Line::from("three"),
+            Line::from("four"),
+            Line::from("five"),
+        ];
+
+        assert_eq!(max_chat_scroll(&lines, Rect::new(0, 0, 20, 5)), 2);
+        assert_eq!(max_chat_scroll(&lines, Rect::new(0, 0, 20, 8)), 0);
     }
 }
