@@ -1,0 +1,30 @@
+[package]
+name = "copilotchat-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "copilotchat_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "copilotchat"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+copilotchat-core = { path = "../copilotchat-core" }
+futures-util.workspace = true
+open.workspace = true
+ratatui.workspace = true
+tokio.workspace = true
+tui-textarea.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

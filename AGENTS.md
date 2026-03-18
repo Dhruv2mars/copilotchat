@@ -2,77 +2,60 @@
 
 ## Product Goal
 
-Hosted web chat app for GitHub Copilot users.
+Rust CLI chat app for GitHub Copilot users.
 
-User flow:
-- open hosted web app
-- app connects to local bridge on user machine
-- bridge pairs browser origin
-- user connects GitHub Copilot in bridge via device flow
-- bridge stores provider auth in OS secure storage
-- bridge fetches available chat models
-- user chats in web UI
-- bridge performs inference and streams tokens back
+Primary user flow:
+- install `copilotchat`
+- open terminal app
+- connect GitHub Copilot via device flow
+- store auth in OS secure storage
+- fetch available Copilot chat models
+- search/select model
+- chat with streaming responses
+- persist and resume local threads
+
+Secondary surface for now:
+- web + bridge stay in repo short-term
+- not primary
+- not release-blocking for CLI work
 
 Non-goal:
-- hosted backend holding user GitHub/Copilot tokens by default
-- PAT-first auth
-- browser talking direct to provider with raw token
+- hosted backend owning user GitHub/Copilot tokens
+- browser-first runtime as main product
+- fake auth, fake provider, fake end-to-end verification
 
 ## Architecture
 
-Monorepo with bun workspaces.
+Monorepo with Bun workspaces + Rust workspace.
 
-### Packages
+### Packages / Crates
 
-| Package | Path | Purpose |
+| Unit | Path | Purpose |
 |---|---|---|
-| `@copilotchat/web` | `apps/web` | Hosted Vite/React UI |
-| `@copilotchat/bridge` | `packages/bridge` | Local bridge for pairing, auth, model discovery, streaming chat |
-| `@copilotchat/shared` | `packages/shared` | Shared protocol types |
-
-### System Boundaries
-
-- `web` is untrusted for provider secrets
-- `bridge` is trusted for provider auth and inference
-- browser stores only local bridge pairing/session data
-- provider tokens live only in bridge secure storage
-- cloud hosts static app assets; no provider-token custody in default architecture
+| `@copilotchat/web` | `apps/web` | legacy hosted UI |
+| `@copilotchat/bridge` | `packages/bridge` | legacy local bridge |
+| `@copilotchat/shared` | `packages/shared` | shared TS protocol types |
+| `@dhruv2mars/copilotchat` | `packages/cli` | npm wrapper / installer / launcher |
+| `copilotchat-core` | `crates/copilotchat-core` | native Copilot auth, models, history, streaming |
+| `copilotchat-cli` | `crates/copilotchat-cli` | Rust CLI + TUI entrypoint |
 
 ### Desired Runtime Flow
 
-1. Web app probes local bridge health.
-2. Web app pairs with bridge for current origin.
-3. Bridge reports auth state.
-4. If signed out, web app starts device auth on bridge.
-5. Bridge opens GitHub device page and polls completion.
-6. Bridge stores session in OS keychain/secure store.
-7. Web app loads models from bridge.
-8. Web app sends chat request to bridge.
-9. Bridge streams assistant deltas back.
-10. Web app renders a normal chat experience.
-
-## Current Direction
-
-When code conflicts with old hosted-BFF assumptions, follow this target architecture:
-- local bridge is primary
-- streaming chat is primary
-- GitHub Copilot connect UX is primary
-- hosted BFF auth/chat code is legacy and should be removed unless explicitly retained for a proven need
+1. User runs `copilotchat`.
+2. CLI checks secure local session.
+3. If signed out, CLI starts GitHub device auth.
+4. User approves device code in browser.
+5. CLI stores session in OS secure storage.
+6. CLI loads Copilot models.
+7. User searches/selects model in TUI.
+8. User chats and receives streaming output.
+9. CLI saves thread history under `~/.copilotchat/`.
+10. Next launch resumes prior state.
 
 ## Build / Dev
 
 ```bash
 bun install
-
-# primary dev loop
-bun run dev
-
-# split processes
-bun run dev:web
-bun run dev:bridge
-
-# checks
 bun run test
 bun run check
 bun run build
@@ -80,95 +63,69 @@ bun run build
 
 ## Testing Rules
 
-- Vitest with 100% thresholds stays enforced.
-- Follow TDD.
-- Start with failing tests for auth flow, pairing flow, model load, chat streaming, and error states.
-- Prefer CLI-level / integration-like tests around bridge client behavior first.
-- Verify the actual app manually after automated tests pass.
-- Do not use fake mode, mock providers, mock auth, or synthetic end-to-end flows for final verification.
-- End-to-end verification must use real integrations and real provider behavior, same as production.
-- After the verification loop is closed, run the full workflow from start to end with `agent-browser` before filing the PR.
-- The pre-PR browser pass must cover the real user flow end to end, not a partial spot check.
-- If real verification is blocked by missing credentials, missing external access, rate limits, or another hard constraint, stop and state the blocker explicitly. Do not substitute a fake flow.
+- TDD always.
+- Start with failing tests.
+- 100% coverage remains the target for Rust core and JS wrapper logic.
+- No fake mode, no mocked final verification, no synthetic end-to-end signoff.
+- Final verification must use real GitHub Copilot auth and real Copilot inference.
+- Before PR:
+  - run `bun run test`
+  - run `bun run check`
+  - run `bun run build`
+  - run real CLI auth/login/models/chat/logout flow
+- After verification loop closes, run the full workflow from start to end using the real CLI, not a partial spot check.
+- If real verification is blocked by credentials, external outage, rate limit, or another hard blocker, stop and state it explicitly.
 
 ## Code Rules
 
 ### General
 
 - TypeScript strict mode.
-- ESM only.
+- Rust edition `2024`.
+- ESM only for JS wrapper.
 - Double quotes.
 - Semicolons.
-- 2-space indent.
-- Prefer small factory functions over classes in app/web code.
-
-### Imports
-
-Order:
-1. external
-2. workspace
-3. local
-4. css last
-
-Use `import type` where possible.
-
-### Naming
-
-- files: kebab-case
-- components: named PascalCase exports
-- functions: camelCase
-- object shapes: `interface`
-- unions/aliases: `type`
-- no enums
+- 2-space indent in TS/JS.
 
 ### Errors
 
-- throw machine-readable error codes
-- catch variable name: `errorValue`
-- bridge/http errors return `{ error: "code" }`
+- Use clear machine-readable errors where practical.
+- Do not swallow provider/auth failures.
+- Secure storage failure must fail clearly, not downgrade silently.
 
-## Web App Contract
+## CLI Contract
 
-The web app should assume:
-- bridge may be offline
-- pairing token may expire
-- auth may expire or require reconnect
-- models may change between sessions
-- streaming may abort mid-response
+CLI must support:
+- `copilotchat`
+- `copilotchat auth login`
+- `copilotchat auth status`
+- `copilotchat auth logout`
+- `copilotchat models`
+- `copilotchat chat "<prompt>"`
 
-The web app must:
-- recover cleanly from bridge offline/unpaired states
-- never require page reload for normal auth/chat flow
-- show device-code instructions clearly
-- stream assistant output incrementally
-- allow repeated chats like a normal chat app
+CLI must:
+- keep provider token local only
+- use device flow for auth
+- stream assistant output
+- persist threads locally
+- resume old threads
+- allow model search/selection
+- allow cancelling active stream
 
-## Bridge Contract
+## Local Data
 
-The bridge must:
-- bind to loopback only
-- validate allowed origins
-- require pairing token for privileged routes
-- keep provider token out of browser responses
-- store auth in secure storage when available
-- support logout
-- support model listing
-- support streaming chat
-- support aborting an active stream
-
-## Environment
+Stored under:
 
 ```bash
-ALLOWED_ORIGIN=http://localhost:5173
-BRIDGE_PORT=8787
-GITHUB_DEVICE_CLIENT_ID=
-GITHUB_DEVICE_SCOPE=
+~/.copilotchat/
 ```
 
-Notes:
-- default bridge origin for web dev is `http://localhost:5173`
-- bridge should stay usable without cloud env vars
-- production hosting is static web + local bridge, not server auth handlers
+Expected files/dirs:
+- `install-meta.json`
+- `config.json`
+- `threads/`
+- `logs/`
+- `bin/`
 
 ## Verification Checklist
 
@@ -181,12 +138,12 @@ bun run build
 ```
 
 Manual:
-- start bridge
-- start web
-- pair
-- connect GitHub Copilot
-- load models
-- send prompt
-- confirm streamed response renders
-- logout and reconnect
-- all of the above must be real, not fake-mode
+- `cargo run -p copilotchat-cli -- auth login`
+- approve device code
+- `cargo run -p copilotchat-cli -- models`
+- `cargo run -p copilotchat-cli -- chat "indian capital city?"`
+- `cargo run -p copilotchat-cli`
+- verify model search
+- verify thread resume
+- verify logout + reconnect
+- all real, no fake-mode
