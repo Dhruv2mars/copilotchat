@@ -42,6 +42,7 @@ test("root readme documents supported install and update paths", () => {
   assert.match(readme, /bun install -g @dhruv2mars\/copilotchat/);
   assert.match(readme, /copilotchat update/);
   assert.match(readme, /First run downloads the native binary/i);
+  assert.doesNotMatch(readme, /web app|Vercel|local bridge/i);
 });
 
 test("package readme is npm-ready and package avoids blocked postinstall", () => {
@@ -52,4 +53,16 @@ test("package readme is npm-ready and package avoids blocked postinstall", () =>
 
   const pkg = JSON.parse(read(join(packageRoot, "package.json")));
   assert.equal("postinstall" in pkg.scripts, false);
+});
+
+test("repo is CLI-only and no longer ships legacy web packages", () => {
+  const rootPkg = JSON.parse(read(join(repoRoot, "package.json")));
+
+  assert.equal(existsSync(join(repoRoot, "apps", "web")), false);
+  assert.equal(existsSync(join(repoRoot, "packages", "bridge")), false);
+  assert.equal(existsSync(join(repoRoot, "packages", "shared")), false);
+  assert.equal(existsSync(join(repoRoot, "vercel.json")), false);
+
+  const scripts = JSON.stringify(rootPkg.scripts);
+  assert.doesNotMatch(scripts, /dev:web|dev:bridge|@copilotchat\/web|@copilotchat\/bridge|@copilotchat\/shared/);
 });

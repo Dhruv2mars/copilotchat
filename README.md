@@ -12,8 +12,6 @@ Auth stays in local app files under `~/.copilotchat/`. No Keychain/system secret
 - install is simple
 - chat feels fast and direct
 
-Web + bridge still live in this monorepo, but the CLI is the primary product.
-
 ## Install
 
 Use any supported package manager:
@@ -40,7 +38,7 @@ copilotchat
 
 First run flow:
 1. open `copilotchat`
-2. approve GitHub device auth
+2. approve the GitHub device code
 3. search/select a model
 4. send a prompt
 5. resume the thread later
@@ -91,6 +89,7 @@ GitHub Releases publish:
 
 ```bash
 bun install
+bun run cli
 bun run test
 bun run check
 bun run build

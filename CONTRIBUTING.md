@@ -20,6 +20,7 @@ For CLI-only work, also run:
 ```bash
 cargo test --workspace
 cargo run -p copilotchat-cli -- --help
+bun run cli
 ```
 
 ## Real verification
