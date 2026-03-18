@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
 import {
+  resolvePackageBinDir,
   resolveInstalledBin,
   resolveInstalledVersion,
   resolveUpdateCommand,
@@ -36,7 +36,7 @@ if (
   })
 ) {
   console.error("copilotchat: setting up native binary...");
-  const here = fileURLToPath(new URL(".", import.meta.url));
+  const here = resolvePackageBinDir(import.meta.url);
   const installer = join(here, "install.js");
   const install = spawnSync(process.execPath, [installer], { stdio: "inherit", env: process.env });
   if (install.status !== 0 || !existsSync(installedBin)) {
@@ -54,7 +54,7 @@ function run(bin, binArgs) {
 
 function readPackageVersion() {
   try {
-    const here = fileURLToPath(new URL(".", import.meta.url));
+    const here = resolvePackageBinDir(import.meta.url);
     const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
     return pkg.version;
   } catch {

@@ -1,5 +1,12 @@
 # @dhruv2mars/copilotchat
 
+## 0.1.5
+
+### Patch Changes
+
+- Fix Bun global install path resolution so the launcher follows the real package path instead of the symlink shim path.
+- Restore first-run native binary download for Bun-installed `copilotchat`.
+
 ## 0.1.4
 
 ### Patch Changes

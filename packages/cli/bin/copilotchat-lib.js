@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { packageManagerHintFromEnv, shouldInstallBinary } from "./install-lib.js";
 
@@ -43,6 +44,10 @@ export function readInstallMeta(env = process.env, home = homedir()) {
 export function resolveInstalledVersion(env = process.env, home = homedir()) {
   const version = readInstallMeta(env, home)?.version;
   return typeof version === "string" && version.length > 0 ? version : null;
+}
+
+export function resolvePackageBinDir(importMetaUrl) {
+  return dirname(realpathSync(fileURLToPath(importMetaUrl)));
 }
 
 function updateArgsFor(manager) {
