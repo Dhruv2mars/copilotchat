@@ -14,27 +14,19 @@ Primary user flow:
 - chat with streaming responses
 - persist and resume local threads
 
-Secondary surface for now:
-- web + bridge stay in repo short-term
-- not primary
-- not release-blocking for CLI work
-
 Non-goal:
 - hosted backend owning user GitHub/Copilot tokens
-- browser-first runtime as main product
+- reviving the old web or bridge path
 - fake auth, fake provider, fake end-to-end verification
 
 ## Architecture
 
-Monorepo with Bun workspaces + Rust workspace.
+Monorepo with Bun workspace + Rust workspace.
 
 ### Packages / Crates
 
 | Unit | Path | Purpose |
 |---|---|---|
-| `@copilotchat/web` | `apps/web` | legacy hosted UI |
-| `@copilotchat/bridge` | `packages/bridge` | legacy local bridge |
-| `@copilotchat/shared` | `packages/shared` | shared TS protocol types |
 | `@dhruv2mars/copilotchat` | `packages/cli` | npm wrapper / installer / launcher |
 | `copilotchat-core` | `crates/copilotchat-core` | native Copilot auth, models, history, streaming |
 | `copilotchat-cli` | `crates/copilotchat-cli` | Rust CLI + TUI entrypoint |
@@ -80,12 +72,11 @@ bun run build
 
 ### General
 
-- TypeScript strict mode.
 - Rust edition `2024`.
 - ESM only for JS wrapper.
 - Double quotes.
 - Semicolons.
-- 2-space indent in TS/JS.
+- 2-space indent in JS.
 
 ### Errors
 
