@@ -12,7 +12,7 @@
     "dev:web": "bun run --filter @copilotchat/web dev",
     "dev:bridge": "bun run --filter @copilotchat/bridge dev",
     "test": "bun run test:js && bun run test:rust",
-    "test:js": "bun run --filter @copilotchat/shared test:coverage && bun run --filter @copilotchat/bridge test:coverage && bun run --filter @copilotchat/web test:coverage && bun run --filter @dhruv2mars/copilotchat test:coverage",
+    "test:js": "bun run --filter @copilotchat/shared test:coverage && bun run --filter @copilotchat/bridge test:coverage && bun run --filter @copilotchat/web test:coverage && cargo build -p copilotchat-cli && bun run --filter @dhruv2mars/copilotchat test:coverage",
     "test:rust": "cargo test --workspace",
     "build": "bun run build:js && cargo build --workspace",
     "build:js": "bun run --filter @copilotchat/shared build && bun run --filter @copilotchat/bridge build && bun run --filter @copilotchat/web build && bun run --filter @dhruv2mars/copilotchat build",
