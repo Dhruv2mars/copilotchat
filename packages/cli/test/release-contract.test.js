@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { statSync } from "node:fs";
 
 import { assetNameFor, checksumsAssetNameFor } from "../bin/install-lib.js";
 
@@ -60,4 +61,11 @@ test("release workflow keeps tag and npm publish contract", () => {
   assert.doesNotMatch(text, /npm publish --provenance --access public/);
   assert.match(text, /NPM_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
   assert.match(text, /trusted publisher not configured and NPM_TOKEN missing/);
+});
+
+test("cli entry scripts are executable", () => {
+  for (const relativePath of ["bin/copilotchat.js", "bin/install.js"]) {
+    const mode = statSync(join(packageRoot, relativePath)).mode & 0o777;
+    assert.notEqual(mode & 0o111, 0, `${relativePath} must be executable`);
+  }
 });
