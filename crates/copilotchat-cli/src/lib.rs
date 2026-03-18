@@ -3,7 +3,7 @@ use std::io::{self, Write};
 
 use anyhow::{Result, anyhow};
 use copilotchat_core::{
-    auth::{KeyringSecretStore, SessionStore, StoredSession, session_needs_refresh},
+    auth::{FileSecretStore, SessionStore, StoredSession, session_needs_refresh},
     config::AppPaths,
     copilot::{DeviceAuthorizationStatus, GitHubCopilotClient},
     history::ThreadStore,
@@ -60,8 +60,9 @@ pub async fn load_session(client: &GitHubCopilotClient) -> Result<StoredSession>
     Ok(session)
 }
 
-pub fn session_store() -> Result<SessionStore<KeyringSecretStore>> {
-    Ok(SessionStore::new(KeyringSecretStore::new()?))
+pub fn session_store() -> Result<SessionStore<FileSecretStore>> {
+    let paths = AppPaths::detect()?;
+    Ok(SessionStore::new(FileSecretStore::new(paths.session_path)))
 }
 
 pub async fn thread_store() -> Result<ThreadStore> {

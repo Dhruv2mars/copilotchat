@@ -1,5 +1,6 @@
+use std::{fs, path::PathBuf};
+
 use anyhow::Result;
-use keyring::{Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
 
 const SESSION_KEY: &str = "copilot_session_v3";
@@ -50,38 +51,55 @@ where
     }
 }
 
-pub struct KeyringSecretStore {
-    entry: Entry,
+pub struct FileSecretStore {
+    path: PathBuf,
 }
 
-impl KeyringSecretStore {
-    pub fn new() -> Result<Self> {
-        Ok(Self {
-            entry: Entry::new("copilotchat", "github-copilot")?,
-        })
+impl FileSecretStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
     }
 }
 
-impl SecretStore for KeyringSecretStore {
+impl SecretStore for FileSecretStore {
     fn delete(&self, _key: &str) -> Result<()> {
-        match self.entry.delete_credential() {
-            Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
-            Err(error_value) => Err(error_value.into()),
+        if self.path.exists() {
+            fs::remove_file(&self.path)?;
         }
+        Ok(())
     }
 
     fn get(&self, _key: &str) -> Result<Option<String>> {
-        match self.entry.get_password() {
-            Ok(value) => Ok(Some(value)),
-            Err(KeyringError::NoEntry) => Ok(None),
-            Err(error_value) => Err(error_value.into()),
+        if !self.path.exists() {
+            return Ok(None);
         }
+
+        Ok(Some(fs::read_to_string(&self.path)?))
     }
 
     fn set(&self, _key: &str, value: &str) -> Result<()> {
-        self.entry.set_password(value)?;
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&self.path, value)?;
+        restrict_session_file(&self.path)?;
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn restrict_session_file(path: &PathBuf) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let permissions = fs::Permissions::from_mode(0o600);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_session_file(_path: &PathBuf) -> Result<()> {
+    Ok(())
 }
 
 pub fn session_needs_refresh(session: &StoredSession) -> bool {
@@ -100,9 +118,11 @@ pub fn session_needs_refresh(session: &StoredSession) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, collections::HashMap};
+    use std::{cell::RefCell, collections::HashMap, fs};
 
-    use super::{SecretStore, SessionStore, StoredSession};
+    use tempfile::tempdir;
+
+    use super::{FileSecretStore, SecretStore, SessionStore, StoredSession};
 
     struct MemorySecretStore {
         values: RefCell<HashMap<String, String>>,
@@ -146,5 +166,33 @@ mod tests {
 
         store.clear().expect("clear");
         assert_eq!(store.load().expect("load after clear"), None);
+    }
+
+    #[test]
+    fn file_secret_store_persists_and_clears_without_system_prompt_path() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.json");
+        let store = FileSecretStore::new(path.clone());
+
+        store.set("ignored", "secret").expect("set");
+        assert_eq!(store.get("ignored").expect("get"), Some("secret".into()));
+
+        store.delete("ignored").expect("delete");
+        assert_eq!(store.get("ignored").expect("get after delete"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_secret_store_locks_session_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("session.json");
+        let store = FileSecretStore::new(path.clone());
+
+        store.set("ignored", "secret").expect("set");
+
+        let mode = fs::metadata(path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }

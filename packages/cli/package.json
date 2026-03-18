@@ -1,19 +1,19 @@
 {
   "name": "@dhruv2mars/copilotchat",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "GitHub Copilot chat app in your terminal",
   "type": "module",
   "bin": {
     "copilotchat": "bin/copilotchat.js"
   },
   "files": [
-    "bin",
-    "scripts",
-    "test"
+    "bin"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "copilotchat": "node bin/copilotchat.js",
-    "postinstall": "node bin/install.js",
     "build": "node -e \"process.exit(0)\"",
     "check": "node --check bin/copilotchat.js && node --check bin/copilotchat-lib.js && node --check bin/install.js && node --check bin/install-lib.js && node --check scripts/test.js",
     "test": "node scripts/test.js",

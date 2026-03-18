@@ -35,6 +35,7 @@ if (
     packageVersion
   })
 ) {
+  console.error("copilotchat: setting up native binary...");
   const here = fileURLToPath(new URL(".", import.meta.url));
   const installer = join(here, "install.js");
   const install = spawnSync(process.execPath, [installer], { stdio: "inherit", env: process.env });

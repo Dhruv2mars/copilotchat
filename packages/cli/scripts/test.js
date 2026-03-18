@@ -10,6 +10,7 @@ const tests = spawnSync(
   [
     "--test",
     join(here, "..", "test", "copilotchat-lib.test.js"),
+    join(here, "..", "test", "docs-contract.test.js"),
     join(here, "..", "test", "install-lib.test.js"),
     join(here, "..", "test", "platform-matrix.test.js"),
     join(here, "..", "test", "release-contract.test.js")

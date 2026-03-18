@@ -1,29 +1,15 @@
 import type { BridgeStreamEvent, ChatStreamRequest } from "@copilotchat/shared";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import { AuthSessionManager, type AuthProvider, type SecureStore } from "./auth-session-manager";
 import { createBridgeServer } from "./bridge-server";
 import { GitHubDeviceFlowClient } from "./github-device-flow-client";
 import { GitHubCopilotClient } from "./github-copilot-client";
 import { resolveAllowedOrigins } from "./bridge-config";
-import { MacOsKeychainStore } from "./macos-keychain-store";
+import { FileStore } from "./file-store";
 import { ModelRegistry } from "./model-registry";
 import { PairingService } from "./pairing-service";
-
-class MemoryStore implements SecureStore {
-  private readonly map = new Map<string, string>();
-
-  async get(key: string) {
-    return this.map.get(key) ?? null;
-  }
-
-  async set(key: string, value: string) {
-    this.map.set(key, value);
-  }
-
-  async delete(key: string) {
-    this.map.delete(key);
-  }
-}
 
 const port = Number(process.env.BRIDGE_PORT ?? "8787");
 const allowedOrigins = resolveAllowedOrigins();
@@ -104,7 +90,8 @@ function createAuthProvider(): AuthProvider {
 }
 
 function createSecureStore() {
-  return process.platform === "darwin" ? new MacOsKeychainStore() : new MemoryStore();
+  const sessionPath = join(homedir(), ".copilotchat", "bridge-session.json");
+  return new FileStore(sessionPath);
 }
 
 async function openSystemBrowser(url: string) {
