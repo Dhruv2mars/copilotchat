@@ -308,4 +308,42 @@ describe("AuthSessionManager", () => {
       status: "pending"
     });
   });
+
+  it("uses the default clock when no custom time source is provided", async () => {
+    const store = new MemoryStore();
+    await store.set(
+      SESSION_KEY,
+      JSON.stringify({
+        accountLabel: "dhruv2mars",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        token: "access-1",
+        tokenHint: "ghu_...cess"
+      })
+    );
+
+    const manager = new AuthSessionManager({
+      provider: {
+        async pollDeviceAuthorization() {
+          return {
+            intervalSeconds: 5,
+            status: "pending"
+          };
+        },
+        async startDeviceAuthorization() {
+          return {
+            deviceCode: "device-4",
+            expiresAt: "2026-03-13T10:10:00.000Z",
+            intervalSeconds: 5,
+            userCode: "ABCD-EFGH",
+            verificationUri: "https://github.com/login/device"
+          };
+        }
+      },
+      store
+    });
+
+    await expect(manager.getStoredSession()).resolves.toMatchObject({
+      token: "access-1"
+    });
+  });
 });
